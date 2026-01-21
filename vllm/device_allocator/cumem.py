@@ -165,11 +165,11 @@ class CuMemAllocator:
         self.pointer_to_data[py_d_mem] = AllocationData(
             allocation_handle, self.current_tag
         )
-        logger.debug(
-            "Allocated %s bytes for %s with address %s from cumem allocator",
-            allocation_handle[1],
+        logger.info(
+            "CuMemAllocator: Allocated %.2f GiB for tag '%s' (total %d allocations)",
+            allocation_handle[1] / 1024**3,
             self.current_tag,
-            py_d_mem,
+            len(self.pointer_to_data),
         )
         return
 
@@ -222,7 +222,7 @@ class CuMemAllocator:
                 cudaMemAdviseSetPreferredLocation,
             )
             
-            logger.info("Using GB200 unified memory sleep (fast path - no copy)")
+            logger.info("Using GB200 unified memory sleep (fast path with unmap)")
             
             for ptr, data in self.pointer_to_data.items():
                 handle = data.handle
@@ -245,6 +245,8 @@ class CuMemAllocator:
                         libcudart.cudaMemPrefetchAsync(
                             ptr, size_in_bytes, cudaCpuDeviceId, None
                         )
+                        # Wait for prefetch to complete
+                        libcudart.cudaDeviceSynchronize()
                         data.is_on_cpu = True
                         
                     except Exception as e:
@@ -262,8 +264,9 @@ class CuMemAllocator:
                         libcudart.cudaMemcpy(cpu_ptr, ptr, size_in_bytes)
                         data.cpu_backup_tensor = cpu_backup_tensor
                 
-                # Note: For unified memory, we don't unmap/release
-                # The memory stays allocated but migrated to CPU
+                # Actually free GPU address space for model swapping
+                # The data is now in CPU memory (via prefetch or copy)
+                unmap_and_release(handle)
         else:
             # ============ TRADITIONAL PATH: Physical Copy ============
             for ptr, data in self.pointer_to_data.items():
@@ -317,7 +320,7 @@ class CuMemAllocator:
                 cudaMemAdviseSetPreferredLocation,
             )
             
-            logger.info("Using GB200 unified memory wake_up (fast path - no copy)")
+            logger.info("Using GB200 unified memory wake_up (fast path with remap)")
             device = torch.cuda.current_device()
             
             for ptr, data in self.pointer_to_data.items():
@@ -326,6 +329,9 @@ class CuMemAllocator:
                     if data.is_on_cpu:
                         handle = data.handle
                         size_in_bytes = handle[1]
+                        
+                        # Remap the memory that was unmapped during sleep
+                        create_and_map(handle)
                         
                         try:
                             # Advise CUDA to prefer this memory back on GPU
@@ -353,6 +359,8 @@ class CuMemAllocator:
                     
                     # Handle tensors that fell back to CPU copy during sleep
                     elif data.cpu_backup_tensor is not None:
+                        handle = data.handle
+                        create_and_map(handle)
                         cpu_backup_tensor = data.cpu_backup_tensor
                         size_in_bytes = (
                             cpu_backup_tensor.numel() * cpu_backup_tensor.element_size()
@@ -391,6 +399,7 @@ class CuMemAllocator:
 
         assert isinstance(tag, str)
 
+        logger.info(f"CuMemAllocator: Entering memory pool context with tag='{tag}'")
         old_tag = self.current_tag
         self.current_tag = tag
         with use_memory_pool_with_allocator(
