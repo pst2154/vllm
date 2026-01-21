@@ -222,7 +222,7 @@ class CuMemAllocator:
                 cudaMemAdviseSetPreferredLocation,
             )
             
-            logger.info("Using GB200 unified memory sleep (fast path with unmap)")
+            logger.info("Using GB200 unified memory sleep (fast path - no unmap)")
             
             for ptr, data in self.pointer_to_data.items():
                 handle = data.handle
@@ -264,9 +264,10 @@ class CuMemAllocator:
                         libcudart.cudaMemcpy(cpu_ptr, ptr, size_in_bytes)
                         data.cpu_backup_tensor = cpu_backup_tensor
                 
-                # Actually free GPU address space for model swapping
-                # The data is now in CPU memory (via prefetch or copy)
-                unmap_and_release(handle)
+                # Note: For unified memory, we do NOT unmap/release
+                # The memory stays mapped at the same virtual address,
+                # but CUDA migrates the physical pages to CPU via NVLink-C2C.
+                # This preserves CUDA graph captures and NCCL registrations.
         else:
             # ============ TRADITIONAL PATH: Physical Copy ============
             for ptr, data in self.pointer_to_data.items():
@@ -320,7 +321,7 @@ class CuMemAllocator:
                 cudaMemAdviseSetPreferredLocation,
             )
             
-            logger.info("Using GB200 unified memory wake_up (fast path with remap)")
+            logger.info("Using GB200 unified memory wake_up (fast path - no remap)")
             device = torch.cuda.current_device()
             
             for ptr, data in self.pointer_to_data.items():
@@ -330,8 +331,9 @@ class CuMemAllocator:
                         handle = data.handle
                         size_in_bytes = handle[1]
                         
-                        # Remap the memory that was unmapped during sleep
-                        create_and_map(handle)
+                        # Note: Memory is already mapped! Just migrate pages back to GPU.
+                        # Do NOT call create_and_map() - that would change the virtual address
+                        # and break CUDA graphs and NCCL registrations.
                         
                         try:
                             # Advise CUDA to prefer this memory back on GPU
@@ -359,6 +361,7 @@ class CuMemAllocator:
                     
                     # Handle tensors that fell back to CPU copy during sleep
                     elif data.cpu_backup_tensor is not None:
+                        # For fallback cases, we still need to remap
                         handle = data.handle
                         create_and_map(handle)
                         cpu_backup_tensor = data.cpu_backup_tensor
