@@ -22,8 +22,8 @@ and understand the measured speedup.
 | Runtime recipe | DFlash `num_speculative_tokens=15`, fp16 GDN SSM cache, CUDA graph disabled |
 | Best strict TG128 mean | `97.20284519156971 tok/s` |
 | Best strict TG128 values | `74.78382592759694`, `102.32446498702366`, `95.06421604875982`, `130.84421561667477`, `82.99750337779336` |
-| Gain vs no-spec NVFP4 | `+26.61 tok/s` / `+37.7%` on the strict c1 lineage |
-| Gain vs stable DFlash k=10 | `+12.42 tok/s` / `+14.6%` on the strict c1 lineage |
+| Gain vs no-spec NVFP4 | `+26.61 tok/s (+37.7%)` on the strict c1 lineage |
+| Gain vs stable DFlash k=10 | `+12.42 tok/s (+14.6%)` on the strict c1 lineage |
 | Activation log | `Qwen GDN T16 commit1 unpaired Triton path active: rows=16 accepted=16 state_dtype=torch.float16` |
 
 ### Performance Progression
@@ -36,9 +36,9 @@ their JSON benchmark shape matches the same TG128 gate.
 | Stage | What changed | Mean TG128 TPS | Gain vs previous | Gain vs no-spec |
 | --- | --- | ---: | ---: | ---: |
 | No-spec NVFP4 baseline | Target model only, no speculative draft | `70.59` | baseline | baseline |
-| Add DFlash k=10 | DFlash proposes draft tokens and the NVFP4 target verifies them | `84.78` | `+14.19` / `+20.1%` | `+14.19` / `+20.1%` |
-| Retune to DFlash k=15 | Wider draft budget gave more accepted tokens per target step on this workload | `91.84` | `+7.05` / `+8.3%` | `+21.24` / `+30.1%` |
-| Add Qwen GDN T16 fast path | Fused fixed-shape verifier, fp16 GDN state cache, accepted-row commit | `97.20` | `+5.37` / `+5.8%` | `+26.61` / `+37.7%` |
+| Add DFlash k=10 | DFlash proposes draft tokens and the NVFP4 target verifies them | `84.78` | `+14.19 tok/s (+20.1%)` | `+14.19 tok/s (+20.1%)` |
+| Retune to DFlash k=15 | Wider draft budget gave more accepted tokens per target step on this workload | `91.84` | `+7.05 tok/s (+8.3%)` | `+21.24 tok/s (+30.1%)` |
+| Add Qwen GDN T16 fast path | Fused fixed-shape verifier, fp16 GDN state cache, accepted-row commit | `97.20` | `+5.37 tok/s (+5.8%)` | `+26.61 tok/s (+37.7%)` |
 
 ### Concurrency Sweep
 
@@ -62,13 +62,13 @@ average these columns together.
 
 The c1 slice from that exact sweep shows the single-request comparisons:
 
-| Variant | c1 mean TG128 TPS | Attributed comparison | c1 TPS delta |
-| --- | ---: | --- | ---: |
-| Vanilla NVFP4 | `30.99` | Baseline | baseline |
-| Native MTP | `44.52` | MTP recipe vs vanilla | `+13.53` / `+43.7%` |
-| DFlash k=15 | `78.91` | DFlash recipe vs vanilla | `+47.92` / `+154.6%` |
-| DFlash k=15 + GDN T16 | `89.60` | GDN T16 bundle vs DFlash k=15 | `+10.69` / `+13.5%` |
-| DFlash k=15 + GDN T16 | `89.60` | Final recipe vs vanilla | `+58.60` / `+189.1%` |
+| Variant | c1 mean TG128 TPS | Attributed comparison | Delta tok/s | Delta % |
+| --- | ---: | --- | ---: | ---: |
+| Vanilla NVFP4 | `30.99` | Baseline | baseline | baseline |
+| Native MTP | `44.52` | MTP recipe vs vanilla | `+13.53 tok/s` | `+43.7%` |
+| DFlash k=15 | `78.91` | DFlash recipe vs vanilla | `+47.92 tok/s` | `+154.6%` |
+| DFlash k=15 + GDN T16 | `89.60` | GDN T16 bundle vs DFlash k=15 | `+10.69 tok/s` | `+13.5%` |
+| DFlash k=15 + GDN T16 | `89.60` | Final recipe vs vanilla | `+58.60 tok/s` | `+189.1%` |
 
 The columns tell different stories. The optimized GDN path wins c1-c5 in this
 sweep and recovers much of DFlash's c10 loss, while native MTP remains the
@@ -219,35 +219,19 @@ claims.
 
 ### Optimization Impact
 
-#### Measured Recipe Attribution
+These are c1 comparisons from the exact sweep. MTP and DFlash are separate
+recipes, not stacked changes.
 
-These rows separate measured recipe deltas from implementation details. Each
-number is a fixed-concurrency comparison from the exact sweep; there is no
-cross-concurrency averaging and no MTP-to-DFlash causal claim.
+| Comparison | Before TPS | After TPS | Change tok/s | Change % | What changed | Scope |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| MTP vs vanilla | `30.99` | `44.52` | `+13.53` | `+43.7%` | Turned on native MTP speculative decoding. | Works for models with supported MTP heads. |
+| DFlash k=15 vs vanilla | `30.99` | `78.91` | `+47.92` | `+154.6%` | Used the DFlash draft model with `num_speculative_tokens=15`. | Needs a compatible draft model; tune k per model. |
+| GDN T16 bundle vs DFlash k=15 | `78.91` | `89.60` | `+10.69` | `+13.5%` | Added the Qwen GDN T16 verifier bundle: fp16 state cache, accepted-row commit, cached decay constants, and the Triton verifier path. | Qwen/GDN-specific as written; the fixed-shape verifier idea can transfer. |
+| Final optimized recipe vs vanilla | `30.99` | `89.60` | `+58.60` | `+189.1%` | DFlash k=15 plus the GDN T16 verifier bundle. | Final tested Qwen Spark recipe. |
 
-| Comparison | c1 | c2 | c3 | c4 | c5 | c10 | What the delta can be attributed to |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| Native MTP vs vanilla | `+13.53` / `+43.7%` | `+23.43` / `+37.0%` | `+31.29` / `+33.3%` | `+37.12` / `+30.4%` | `+32.94` / `+22.1%` | `+36.92` / `+15.4%` | Native MTP speculative decoding recipe. Not part of the final DFlash recipe. |
-| DFlash k=15 vs vanilla | `+47.92` / `+154.6%` | `+45.97` / `+72.6%` | `+48.60` / `+51.8%` | `+43.25` / `+35.4%` | `+26.71` / `+17.9%` | `-8.80` / `-3.7%` | DFlash draft model with k=15. This is an alternative to MTP, not an incremental improvement after MTP. |
-| GDN T16 bundle vs DFlash k=15 | `+10.69` / `+13.5%` | `+10.38` / `+9.5%` | `+4.92` / `+3.5%` | `+5.06` / `+3.1%` | `+21.83` / `+12.4%` | `+31.43` / `+13.6%` | The custom Qwen GDN verifier bundle, because both rows use DFlash k=15. |
-| Final optimized recipe vs vanilla | `+58.60` / `+189.1%` | `+56.35` / `+89.0%` | `+53.52` / `+57.0%` | `+48.31` / `+39.5%` | `+48.54` / `+32.5%` | `+22.63` / `+9.4%` | End-to-end DFlash k=15 plus GDN T16 recipe versus target-only NVFP4. |
-
-#### Implementation Attribution
-
-The GDN T16 verifier was measured as one bundle. Rows marked as included were
-necessary for the bundle to activate correctly, but were not separately ablated.
-
-| Component | Measured credit | What it does | Model-specific or extensible |
-| --- | --- | --- | --- |
-| Native MTP speculation | Recipe-level delta versus vanilla only | Uses Qwen's native MTP path to draft one token and reduce target-only decode work. | Extensible to models with native MTP heads and vLLM support; the speedup depends on head quality and verifier overhead. |
-| DFlash k=15 draft model | Recipe-level delta versus vanilla only | Uses the DFlash draft model and a k=15 verifier shape to increase accepted work. | Extensible when a compatible draft model exists; the winning k is model, prompt, sampling, and hardware dependent. |
-| Qwen GDN T16 verifier bundle | Measured against same DFlash k=15 recipe: `+10.69 tok/s` at c1, `+31.43 tok/s` at c10 | Specializes target-side GDN verification for the common DFlash shape, including fp16 state cache and accepted-row commit. | Kernel is Qwen3.6/GDN/DFlash-specific as written; the fixed-shape verifier pattern transfers to other stable verifier shapes. |
-| Accepted-row state commit | Included in the GDN T16 bundle, not separately isolated | Computes verifier outputs exactly, but only commits the accepted recurrent state row to the persistent cache. | Broad speculative-decoding idea for stateful layers; each model needs correct accepted-row metadata and cache layout. |
-| Unpaired value-head layout | Included in the GDN T16 bundle, not separately isolated | Launches one value head per Triton program with `block_v=8` instead of pairing sibling value heads in a larger program. | Shape and hardware specific; retune for other value-head counts, state sizes, or GPUs. |
-| fp16 GDN SSM cache | Included in the GDN T16 bundle, not separately isolated | Stores the recurrent GDN state cache in fp16 while keeping recurrence math in fp32. | Extensible to recurrent-state models that tolerate fp16 state cache precision; accuracy-test per model. |
-| Cached decay constants | Included in the GDN T16 bundle, not separately isolated | Caches `-exp(A_log)` per layer and passes it into the Triton verifier instead of rebuilding static decay terms in the hot path. | Reusable for GDN/SSM-style layers with static decay parameters. |
-| Accepted-token metadata plumbing | Required for the GDN T16 bundle to activate | Carries the accepted token count into GDN attention metadata so the kernel can commit the right state row directly. | General speculative-decoding plumbing for any stateful verifier. |
-| Strict fallback guards | No TPS credit; correctness guard | Activates the custom kernel only for the exact tested shape and falls back to stock vLLM otherwise. | General safety pattern for experimental kernels. |
+The GDN T16 sub-pieces were not measured one by one. They should be credited as
+one bundle because the fast path only works when the metadata, cache dtype,
+state commit, shape guards, and Triton kernel agree.
 
 ### Why This Is Faster
 
