@@ -28,14 +28,15 @@ The columns are separate operating points and should not be averaged together.
 | DFlash k=15 | +47.92 / +154.6% | +45.97 / +72.6% | +48.60 / +51.8% | +43.25 / +35.4% | +26.71 / +17.9% | -8.80 / -3.7% |
 | DFlash k=15 + GDN T16 | +58.60 / +189.1% | +56.35 / +89.0% | +53.52 / +57.0% | +48.31 / +39.5% | +48.54 / +32.5% | +22.63 / +9.4% |
 
-## c1 Progression
+## c1 Comparisons
 
-| Stage | Mean TG128 TPS | Gain vs previous | Gain vs vanilla | Notes |
-| --- | ---: | ---: | ---: | --- |
-| Vanilla NVFP4 | 30.99 | baseline | baseline | Target model only, no speculative decoding. |
-| Native MTP | 44.52 | +13.53 / +43.7% | +13.53 / +43.7% | Native MTP speculation with num_speculative_tokens=1. |
-| DFlash k=15 | 78.91 | +34.39 / +77.2% | +47.92 / +154.6% | DFlash draft model with num_speculative_tokens=15. |
-| DFlash k=15 + GDN T16 | 89.60 | +10.69 / +13.5% | +58.60 / +189.1% | DFlash k=15 plus fp16 GDN SSM cache and the Qwen GDN T16 commit1 unpaired Triton verifier path. |
+| Variant | Mean TG128 TPS | Attributed comparison | Delta | Notes |
+| --- | ---: | --- | ---: | --- |
+| Vanilla NVFP4 | 30.99 | Baseline | baseline | Target model only, no speculative decoding. |
+| Native MTP | 44.52 | MTP recipe vs vanilla | +13.53 / +43.7% | Native MTP speculation with num_speculative_tokens=1. |
+| DFlash k=15 | 78.91 | DFlash recipe vs vanilla | +47.92 / +154.6% | DFlash draft model with num_speculative_tokens=15; alternative to MTP. |
+| DFlash k=15 + GDN T16 | 89.60 | GDN T16 bundle vs DFlash k=15 | +10.69 / +13.5% | Same DFlash k=15 recipe plus fp16 GDN SSM cache and the Qwen GDN T16 commit1 unpaired Triton verifier path. |
+| DFlash k=15 + GDN T16 | 89.60 | Final recipe vs vanilla | +58.60 / +189.1% | End-to-end optimized recipe versus target-only NVFP4. |
 
 ## Optimized Activation Evidence
 
