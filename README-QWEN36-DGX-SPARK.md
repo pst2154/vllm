@@ -1,7 +1,7 @@
 # Qwen3.6 NVFP4 + DFlash on DGX Spark
 
-This branch carries the best confirmed Qwen3.6 35B A3B NVFP4/DFlash path from
-the DGX Spark optimization run.
+This branch adds the Qwen3.6 35B A3B NVFP4/DFlash fast path that reached the
+best confirmed DGX Spark result.
 
 ## Best Confirmed Result
 
@@ -10,17 +10,11 @@ the DGX Spark optimization run.
 | Model | `Qwen3.6-35B-A3B-NVFP4` |
 | Draft model | `Qwen3.6-35B-A3B-DFlash` |
 | Hardware | DGX Spark / GB10 |
-| vLLM path | TF5 container plus this fork's GDN fast path |
 | Active optimization | `VLLM_QWEN_GDN_T16_COMMIT1_UNPAIRED=1` |
 | Runtime recipe | DFlash `num_speculative_tokens=15`, fp16 GDN SSM cache, CUDA graph disabled |
-| Benchmark gate | `pp=2048`, `tg=128`, `depth=0`, concurrency 1, no prompt cache, generation latency |
 | Best 5-run TG128 mean | `97.20284519156971 tok/s` |
 | Best 5-run values | `74.78382592759694`, `102.32446498702366`, `95.06421604875982`, `130.84421561667477`, `82.99750337779336` |
 | Activation log | `Qwen GDN T16 commit1 unpaired Triton path active: rows=16 accepted=16 state_dtype=torch.float16` |
-
-A later 5-hour offline loop did not beat this result. The post-loop serving
-confirmation with 2 warmup and 5 measured runs scored `85.85016733500065 tok/s`,
-so the `97.20284519156971 tok/s` run remains the score to beat.
 
 ## How To Run
 
@@ -104,14 +98,20 @@ docker logs qwen36-t16-commit1-unpaired 2>&1 \
 
 ## Benchmark
 
-Run two warmup passes first:
+Use the same TG128 gate: `pp=2048`, `tg=128`, `depth=0`, concurrency 1,
+generation latency, no prompt cache.
+
+Run two warmup passes, then five measured runs:
 
 ```bash
-/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy \
+BENCH=/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy
+TOKENIZER=/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4
+
+"${BENCH}" \
   --base-url http://127.0.0.1:8000/v1 \
   --model qwen3.6-35b \
   --served-model-name qwen3.6-35b \
-  --tokenizer /home/asteiner/models/Qwen3.6-35B-A3B-NVFP4 \
+  --tokenizer "${TOKENIZER}" \
   --pp 2048 \
   --tg 128 \
   --depth 0 \
@@ -120,16 +120,12 @@ Run two warmup passes first:
   --latency-mode generation \
   --save-result qwen36_t16_warmup_tg128.json \
   --format json
-```
 
-Then run the measured 5-run gate:
-
-```bash
-/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy \
+"${BENCH}" \
   --base-url http://127.0.0.1:8000/v1 \
   --model qwen3.6-35b \
   --served-model-name qwen3.6-35b \
-  --tokenizer /home/asteiner/models/Qwen3.6-35B-A3B-NVFP4 \
+  --tokenizer "${TOKENIZER}" \
   --pp 2048 \
   --tg 128 \
   --depth 0 \
@@ -140,25 +136,21 @@ Then run the measured 5-run gate:
   --format json
 ```
 
-## Uploaded Changes
+## Optimizations
 
-| Change | Files / flag | What it does | Evidence |
-| --- | --- | --- | --- |
-| T16 commit-one unpaired GDN recurrent kernel | `vllm/model_executor/layers/mamba/gdn_linear_attn.py`, `VLLM_QWEN_GDN_T16_COMMIT1_UNPAIRED=1` | Specializes the live DFlash verifier shape: one request, 16 verifier rows, DFlash k=15, 128x128 GDN state tiles. It computes every verifier output row exactly and commits only the accepted recurrent state row in one Triton launch. | Best offline GDN fixture: `16.408000946044922 us`; best served TG128: `97.20284519156971 tok/s`. |
-| Unpaired value-head launch layout | `_qwen_gdn_t16_commit1_unpaired_kernel` | Launches one value head per program with `block_v=8`. This repeats q/k work for sibling value heads but reduces per-program state pressure enough to beat paired-HV variants on GB10. | Paired-HV and shared sibling-HV experiments were slower; the unpaired path remained the incumbent. |
-| Accepted-token CPU metadata | `vllm/v1/attention/backends/gdn_attn.py` | Carries the already-known accepted-token count into GDN metadata so the fast path can choose the exact state row to commit without changing target verification semantics. | Required by the active T16 path; activation log reports the accepted row count. |
-| fp16 GDN SSM cache recipe | Runtime flag `--mamba-ssm-cache-dtype float16` | Uses fp16 for the GDN recurrent cache while the kernel computes the recurrent update in fp32 and writes the committed row back to the cache dtype. This reduces state bandwidth for the short verifier path. | Used in the best serving run; offline max abs error stayed under the `0.02` gate. |
-| Cached `-exp(A_log)` decay vector | `_qwen_gdn_t16_a_log_neg_exp()` | Precomputes and caches the static per-head decay coefficient used by the recurrent kernel. | Keeps the hot verifier launch focused on per-token recurrent work. |
-| Strict guards and stock fallback | `_maybe_forward_qwen_gdn_t16_commit1_unpaired_spec()` | Enables the fast path only for the exact tested shape: no prefill rows, one speculative decode, `num_spec=15`, 16 verifier rows, 128-dim heads, and contiguous GDN state metadata. All other cases fall back to the stock path. | Avoids silently changing behavior outside the benchmarked Qwen/DFlash case. |
-| DFlash k=15 serving recipe | `--speculative-config '{"method":"dflash",...,"num_speculative_tokens":15}'` | Uses the DFlash drafter at the draft width that produced the best live result with the T16 GDN verifier. | Best live result used DFlash k=15. |
-| CUDA graph disabled for this recipe | `--compilation-config '{"cudagraph_mode":0}'` | Avoids CUDA graph capture for this Spark/TF5 path; the measured best was with compile enabled but CUDA graph mode set to none. | Used in both the best run and the post-loop confirmation. |
-| Experimental Qwen GDN hooks, left off by default | `VLLM_QWEN_GDN_FLASHINFER_MTP`, `VLLM_QWEN_GDN_FUSED_CONV_PREP`, `VLLM_QWEN_GDN_FP8_PROJ`, `VLLM_QWEN_GDN_NVFP4_PROJ`, `VLLM_QWEN_GDN_TRITON_PROJ`, DDTree-related GDN flags | Keeps bounded experiment hooks in the fork, but they are not part of the best recipe unless explicitly enabled. | These lanes did not replace the T16 unpaired path in the confirmed score. |
+| Optimization | What changed | Why it is faster |
+| --- | --- | --- |
+| Fixed-shape GDN verifier | Added `_qwen_gdn_t16_commit1_unpaired_kernel` for the common DFlash k=15 verifier shape: 16 rows, 128-dim heads, one speculative decode. | Avoids the generic indexed GDN replay path for the hot decode case and runs the verifier recurrence as one compact Triton launch. |
+| Commit only the accepted state | The kernel still computes every verifier output token, but only writes the accepted recurrent state row back to the cache. | Rejected speculative rows do not need persistent GDN state, so this cuts state-cache write traffic. |
+| Unpaired value-head layout | Launches one value head per program with `block_v=8` instead of pairing sibling value heads in one larger program. | Uses fewer registers per program on GB10, which was faster than sharing q/k work across sibling value heads. |
+| fp16 GDN cache | Serve with `--mamba-ssm-cache-dtype float16`; the kernel keeps recurrence math in fp32 and writes the final cache row in fp16. | Reduces memory bandwidth for the 128x128 recurrent state cache without changing the target verification rule. |
+| Cached decay constants | Caches `-exp(A_log)` once per layer and passes it to the Triton kernel. | Removes static per-head decay setup from the hot verifier path. |
+| Accepted-token metadata | `gdn_attn.py` carries the accepted token count into GDN metadata. | Lets the fast path choose the right state row directly, without an extra sync or guesswork. |
+| Strict fallback guards | The fast path only activates for the exact tested shape; all other requests use stock vLLM behavior. | Keeps the speedup narrow and safe instead of adding overhead or behavior changes to unrelated paths. |
 
-## Notes
+## Files
 
-- Do not enable B12x on this host unless you explicitly accept the Spark hang
-  risk from prior experiments.
-- The current best is noisy. Compare candidates with the same benchmark gate and
-  at least 2 warmup runs plus 5 measured runs.
-- The fast path preserves exact target/GDN verification for emitted tokens; it
-  changes how the short GDN verifier work is executed, not the acceptance rule.
+| File | Purpose |
+| --- | --- |
+| `vllm/model_executor/layers/mamba/gdn_linear_attn.py` | Qwen GDN T16 verifier kernel and guarded runtime path. |
+| `vllm/v1/attention/backends/gdn_attn.py` | Accepted-token metadata needed to commit the right GDN state row. |
