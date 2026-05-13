@@ -50,9 +50,9 @@ class NvFp4MoeBackend(Enum):
 
 FLASHINFER_NVFP4_MOE_BACKENDS = [
     NvFp4MoeBackend.FLASHINFER_TRTLLM,
-    NvFp4MoeBackend.FLASHINFER_CUTLASS,
     NvFp4MoeBackend.FLASHINFER_CUTEDSL,
     NvFp4MoeBackend.FLASHINFER_CUTEDSL_BATCHED,
+    NvFp4MoeBackend.FLASHINFER_CUTLASS,
 ]
 
 fi_2_vllm_backend_map: dict[FlashinferMoeBackend, NvFp4MoeBackend] = {
@@ -162,9 +162,12 @@ def select_nvfp4_moe_backend(
         NvFp4MoeBackend.FLASHINFER_TRTLLM,
         NvFp4MoeBackend.FLASHINFER_CUTEDSL,
         NvFp4MoeBackend.FLASHINFER_CUTEDSL_BATCHED,
-        NvFp4MoeBackend.FLASHINFER_CUTLASS,
         NvFp4MoeBackend.VLLM_CUTLASS,
         NvFp4MoeBackend.MARLIN,
+        # Prefer the native kernels before FlashInfer CUTLASS for NvFP4 MoE.
+        # The FlashInfer CUTLASS path is still available as a fallback or by
+        # explicit request.
+        NvFp4MoeBackend.FLASHINFER_CUTLASS,
         NvFp4MoeBackend.EMULATION,
     ]
 
