@@ -147,15 +147,15 @@ throughput.
 
 ### Optimizations
 
-| Optimization | What changed | Why it is faster |
-| --- | --- | --- |
-| Fixed-shape GDN verifier | Added `_qwen_gdn_t16_commit1_unpaired_kernel` for the common DFlash k=15 verifier shape: 16 rows, 128-dim heads, one speculative decode. | Avoids the generic indexed GDN replay path for the hot decode case and runs the verifier recurrence as one compact Triton launch. |
-| Commit only the accepted state | The kernel still computes every verifier output token, but only writes the accepted recurrent state row back to the cache. | Rejected speculative rows do not need persistent GDN state, so this cuts state-cache write traffic. |
-| Unpaired value-head layout | Launches one value head per program with `block_v=8` instead of pairing sibling value heads in one larger program. | Uses fewer registers per program on GB10, which was faster than sharing q/k work across sibling value heads. |
-| fp16 GDN cache | Serve with `--mamba-ssm-cache-dtype float16`; the kernel keeps recurrence math in fp32 and writes the final cache row in fp16. | Reduces memory bandwidth for the 128x128 recurrent state cache without changing the target verification rule. |
-| Cached decay constants | Caches `-exp(A_log)` once per layer and passes it to the Triton kernel. | Removes static per-head decay setup from the hot verifier path. |
-| Accepted-token metadata | `gdn_attn.py` carries the accepted token count into GDN metadata. | Lets the fast path choose the right state row directly, without an extra sync or guesswork. |
-| Strict fallback guards | The fast path only activates for the exact tested shape; all other requests use stock vLLM behavior. | Keeps the speedup narrow and safe instead of adding overhead or behavior changes to unrelated paths. |
+| Optimization | What changed | Why it is faster | Model specificity / extension |
+| --- | --- | --- | --- |
+| Fixed-shape GDN verifier | Added `_qwen_gdn_t16_commit1_unpaired_kernel` for the common DFlash k=15 verifier shape: 16 rows, 128-dim heads, one speculative decode. | Avoids the generic indexed GDN replay path for the hot decode case and runs the verifier recurrence as one compact Triton launch. | Specific to Qwen3.6/DFlash/GDN as written, but the same fixed-shape verifier idea can be ported to other models with stable speculative verifier shapes. |
+| Commit only the accepted state | The kernel still computes every verifier output token, but only writes the accepted recurrent state row back to the cache. | Rejected speculative rows do not need persistent GDN state, so this cuts state-cache write traffic. | General pattern for speculative decoding with recurrent state caches; each model needs correct accepted-row metadata and cache layout handling. |
+| Unpaired value-head layout | Launches one value head per program with `block_v=8` instead of pairing sibling value heads in one larger program. | Uses fewer registers per program on GB10, which was faster than sharing q/k work across sibling value heads. | Mostly hardware/model-shape specific; retune for other GDN head counts, state sizes, or GPUs. |
+| fp16 GDN cache | Serve with `--mamba-ssm-cache-dtype float16`; the kernel keeps recurrence math in fp32 and writes the final cache row in fp16. | Reduces memory bandwidth for the 128x128 recurrent state cache without changing the target verification rule. | Extensible to models whose recurrent state tolerates fp16 cache precision; should be accuracy-tested per model. |
+| Cached decay constants | Caches `-exp(A_log)` once per layer and passes it to the Triton kernel. | Removes static per-head decay setup from the hot verifier path. | Broadly reusable for GDN/SSM-style layers with static decay parameters. |
+| Accepted-token metadata | `gdn_attn.py` carries the accepted token count into GDN metadata. | Lets the fast path choose the right state row directly, without an extra sync or guesswork. | General speculative-decoding plumbing; useful for other stateful verifier fast paths. |
+| Strict fallback guards | The fast path only activates for the exact tested shape; all other requests use stock vLLM behavior. | Keeps the speedup narrow and safe instead of adding overhead or behavior changes to unrelated paths. | General safety pattern for model-specific kernels and experimental fast paths. |
 
 ### Files
 
