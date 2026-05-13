@@ -1,0 +1,10 @@
+serving_prewarm_status=pass
+prewarm_runs=2
+prewarm_result_file=/home/asteiner/Git_Repos/codex-inference-optimization/metrics/serving/qwen36_progression_20260513T152918Z/raw/optimized_nvfp4_c3_tg128_prewarm.json
+serving_status=pass
+candidate_name=qwen36_progression_20260513T152918Z_optimized_nvfp4_c3
+tg128_tok_per_sec=147.356353
+peak_tok_per_sec=178.400000
+target_tok_per_sec=0.000000
+target_met=true
+serving_json={"candidate_description": "Qwen3.6 NVFP4 with DFlash k=15, fp16 GDN SSM cache, and Qwen GDN T16 commit1 unpaired Triton path", "candidate_name": "qwen36_progression_20260513T152918Z_optimized_nvfp4_c3", "command": ["/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy", "--base-url", "http://127.0.0.1:8000/v1", "--model", "qwen3.6-35b", "--served-model-name", "qwen3.6-35b", "--tokenizer", "/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4", "--pp", "2048", "--tg", "128", "--depth", "0", "--concurrency", "3", "--runs", "10", "--no-cache", "--latency-mode", "generation", "--save-result", "/home/asteiner/Git_Repos/codex-inference-optimization/metrics/serving/qwen36_progression_20260513T152918Z/raw/optimized_nvfp4_c3_tg128.json", "--format", "json", "--no-warmup", "--skip-coherence", "--no-adapt-prompt"], "concurrency": 3, "depth": 0, "generate_tokens": 128, "latency_ms": 70.67525265544343, "model": "qwen3.6-35b", "peak_tok_per_sec": 178.4, "prompt_tokens": 2048, "requested_concurrency": 3, "result_file": "/home/asteiner/Git_Repos/codex-inference-optimization/metrics/serving/qwen36_progression_20260513T152918Z/raw/optimized_nvfp4_c3_tg128.json", "runs": 10, "target_met": true, "target_tok_per_sec": 0.0, "tg_tok_per_sec": 147.35635316998327, "tg_values": [144.9905172362704, 149.80319434326213, 156.718198317109, 147.46437994458725, 145.09100067902887, 151.23030041057564, 150.90070671403836, 160.31597674838696, 138.77349477190526, 128.27576253466864], "tokenizer": "/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4"}

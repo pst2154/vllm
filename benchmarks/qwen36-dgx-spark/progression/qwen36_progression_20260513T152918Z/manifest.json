@@ -1,0 +1,13 @@
+{
+  "run_id": "qwen36_progression_20260513T152918Z",
+  "started_at_utc": "2026-05-13T15:29:18Z",
+  "prompt_tokens": 2048,
+  "generate_tokens": 128,
+  "depth": 0,
+  "prewarm_runs": 2,
+  "measured_runs": 10,
+  "concurrencies": "1 2 3 4 5 10",
+  "variants": "vanilla_nvfp4 mtp_nvfp4 dflash_nvfp4 optimized_nvfp4",
+  "max_num_seqs": 10,
+  "llama_benchy_bin": "/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy"
+}

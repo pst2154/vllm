@@ -1,0 +1,121 @@
+{
+  "benchmarks": [
+    {
+      "concurrency": 1,
+      "context_size": 0,
+      "e2e_ttft": {
+        "mean": 2657.4634469870944,
+        "std": 0.0,
+        "values": [
+          2657.4634469870944
+        ]
+      },
+      "est_ppt": {
+        "mean": 0.0,
+        "std": 0.0,
+        "values": [
+          0.0
+        ]
+      },
+      "is_context_prefill_phase": false,
+      "peak_req_throughput": {
+        "mean": 85.0,
+        "std": 0.0,
+        "values": [
+          85.0
+        ]
+      },
+      "peak_throughput": {
+        "mean": 85.0,
+        "std": 0.0,
+        "values": [
+          85.0
+        ]
+      },
+      "pp_req_throughput": null,
+      "pp_throughput": null,
+      "prompt_size": 2048,
+      "requests_throughput_over_time": null,
+      "response_size": 128,
+      "tg_req_throughput": {
+        "mean": 72.31829762747654,
+        "std": 0.0,
+        "values": [
+          72.31829762747654
+        ]
+      },
+      "tg_throughput": {
+        "mean": 72.31829762747654,
+        "std": 0.0,
+        "values": [
+          72.31829762747654
+        ]
+      },
+      "throughput_over_time": null,
+      "ttfr": {
+        "mean": 2657.4634469870944,
+        "std": 0.0,
+        "values": [
+          2657.4634469870944
+        ]
+      }
+    }
+  ],
+  "latency_mode": "generation",
+  "latency_ms": 15810.186157662733,
+  "max_concurrency": 1,
+  "model": "qwen3.6-35b",
+  "prefix_caching_enabled": false,
+  "qwen_tg128_contract": {
+    "candidate_description": "Qwen3.6 optimized GDN T16 activation check",
+    "candidate_name": "qwen36_progression_activation_check",
+    "concurrency": 1,
+    "context_size": 0,
+    "depth": 0,
+    "generate_tokens": 128,
+    "latency_mode": "generation",
+    "llama_benchy_command": [
+      "/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy",
+      "--base-url",
+      "http://127.0.0.1:8000/v1",
+      "--model",
+      "qwen3.6-35b",
+      "--served-model-name",
+      "qwen3.6-35b",
+      "--tokenizer",
+      "/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4",
+      "--pp",
+      "2048",
+      "--tg",
+      "128",
+      "--depth",
+      "0",
+      "--concurrency",
+      "1",
+      "--runs",
+      "1",
+      "--no-cache",
+      "--latency-mode",
+      "generation",
+      "--save-result",
+      "/home/asteiner/Git_Repos/codex-inference-optimization/metrics/serving/qwen36_progression_20260513T152918Z/activation_check_tg128.json",
+      "--format",
+      "json",
+      "--no-warmup",
+      "--skip-coherence",
+      "--no-adapt-prompt"
+    ],
+    "model": "qwen3.6-35b",
+    "no_adapt_prompt": true,
+    "no_cache": true,
+    "no_internal_warmup": true,
+    "prompt_tokens": 2048,
+    "requested_concurrency": 1,
+    "run_count": 1,
+    "schema_version": 1,
+    "skip_coherence": true,
+    "stamped_at": "2026-05-13T16:15:34.876890+00:00"
+  },
+  "timestamp": "2026-05-13 16:15:34Z",
+  "version": "0.3.7"
+}

@@ -1,0 +1,4 @@
+container_status=running
+container_name=qwen36-progress-optimized_nvfp4
+health_status=pass
+command_file=/home/asteiner/Git_Repos/codex-inference-optimization/logs/qwen36/qwen36-progress-optimized_nvfp4.command.txt

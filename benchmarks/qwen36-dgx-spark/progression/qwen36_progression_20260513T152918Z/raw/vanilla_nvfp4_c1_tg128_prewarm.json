@@ -1,0 +1,90 @@
+{
+  "version": "0.3.7",
+  "timestamp": "2026-05-13 15:33:13Z",
+  "latency_mode": "generation",
+  "latency_ms": 5929.800646670628,
+  "model": "qwen3.6-35b",
+  "prefix_caching_enabled": false,
+  "max_concurrency": 1,
+  "benchmarks": [
+    {
+      "concurrency": 1,
+      "context_size": 0,
+      "prompt_size": 2048,
+      "response_size": 128,
+      "is_context_prefill_phase": false,
+      "pp_throughput": {
+        "mean": 84.51031080565032,
+        "std": 0.0,
+        "values": [
+          84.51031080565032
+        ]
+      },
+      "pp_req_throughput": {
+        "mean": 84.51031080565032,
+        "std": 0.0,
+        "values": [
+          84.51031080565032
+        ]
+      },
+      "tg_throughput": {
+        "mean": 31.231711313939513,
+        "std": 0.03639216403271561,
+        "values": [
+          31.195319149906798,
+          31.26810347797223
+        ]
+      },
+      "tg_req_throughput": {
+        "mean": 31.231711313939513,
+        "std": 0.03639216403271561,
+        "values": [
+          31.195319149906798,
+          31.26810347797223
+        ]
+      },
+      "peak_throughput": {
+        "mean": 33.0,
+        "std": 0.0,
+        "values": [
+          33.0,
+          33.0
+        ]
+      },
+      "peak_req_throughput": {
+        "mean": 33.0,
+        "std": 0.0,
+        "values": [
+          33.0,
+          33.0
+        ]
+      },
+      "ttfr": {
+        "mean": 15339.565754999057,
+        "std": 14942.293006010004,
+        "values": [
+          30281.85876100906,
+          397.27274898905307
+        ]
+      },
+      "est_ppt": {
+        "mean": 12176.029057169217,
+        "std": 12176.029057169217,
+        "values": [
+          24352.058114338433,
+          0.0
+        ]
+      },
+      "e2e_ttft": {
+        "mean": 15339.565754999057,
+        "std": 14942.293006010004,
+        "values": [
+          30281.85876100906,
+          397.27274898905307
+        ]
+      },
+      "throughput_over_time": null,
+      "requests_throughput_over_time": null
+    }
+  ]
+}

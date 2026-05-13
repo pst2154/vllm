@@ -1,0 +1,6 @@
+Qwen optimized activation check
+Run ID: qwen36_progression_20260513T152918Z
+Purpose: one-request decode used only to trigger optimized fast-path activation evidence; not included in the throughput matrix.
+
+Activation evidence:
+Qwen GDN T16 commit1 unpaired Triton path active: rows=16 accepted=16 state_dtype=torch.float16

@@ -1,0 +1,10 @@
+serving_prewarm_status=pass
+prewarm_runs=2
+prewarm_result_file=/home/asteiner/Git_Repos/codex-inference-optimization/metrics/serving/qwen36_progression_20260513T152918Z/raw/mtp_nvfp4_c5_tg128_prewarm.json
+serving_status=pass
+candidate_name=qwen36_progression_20260513T152918Z_mtp_nvfp4_c5
+tg128_tok_per_sec=182.228904
+peak_tok_per_sec=209.100000
+target_tok_per_sec=0.000000
+target_met=true
+serving_json={"candidate_description": "Qwen3.6 NVFP4 with native MTP speculative decoding, num_speculative_tokens=1", "candidate_name": "qwen36_progression_20260513T152918Z_mtp_nvfp4_c5", "command": ["/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy", "--base-url", "http://127.0.0.1:8000/v1", "--model", "qwen3.6-35b", "--served-model-name", "qwen3.6-35b", "--tokenizer", "/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4", "--pp", "2048", "--tg", "128", "--depth", "0", "--concurrency", "5", "--runs", "10", "--no-cache", "--latency-mode", "generation", "--save-result", "/home/asteiner/Git_Repos/codex-inference-optimization/metrics/serving/qwen36_progression_20260513T152918Z/raw/mtp_nvfp4_c5_tg128.json", "--format", "json", "--no-warmup", "--skip-coherence", "--no-adapt-prompt"], "concurrency": 5, "depth": 0, "generate_tokens": 128, "latency_ms": 69.63101598861006, "model": "qwen3.6-35b", "peak_tok_per_sec": 209.1, "prompt_tokens": 2048, "requested_concurrency": 5, "result_file": "/home/asteiner/Git_Repos/codex-inference-optimization/metrics/serving/qwen36_progression_20260513T152918Z/raw/mtp_nvfp4_c5_tg128.json", "runs": 10, "target_met": true, "target_tok_per_sec": 0.0, "tg_tok_per_sec": 182.22890393745146, "tg_values": [185.9121378076687, 187.93947074038962, 172.33104668761814, 183.18817872643532, 177.34160731335706, 174.1378259976615, 185.32832085693548, 185.23669114170934, 180.81576932505791, 190.05799077768134], "tokenizer": "/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4"}
