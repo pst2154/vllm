@@ -3,7 +3,11 @@
 This branch adds the Qwen3.6 35B A3B NVFP4/DFlash fast path that reached the
 best confirmed DGX Spark result.
 
-## Best Confirmed Result
+## Simple
+
+Use this section if you just want to run the fast path and verify that it is on.
+
+### Result
 
 | Item | Value |
 | --- | --- |
@@ -16,7 +20,7 @@ best confirmed DGX Spark result.
 | Best 5-run values | `74.78382592759694`, `102.32446498702366`, `95.06421604875982`, `130.84421561667477`, `82.99750337779336` |
 | Activation log | `Qwen GDN T16 commit1 unpaired Triton path active: rows=16 accepted=16 state_dtype=torch.float16` |
 
-## How To Run
+### Run
 
 The tested setup used the Spark TF5 image and mounted this fork's edited GDN
 files into the container. Set the paths for your machine first:
@@ -96,7 +100,7 @@ docker logs qwen36-t16-commit1-unpaired 2>&1 \
   | grep 'Qwen GDN T16 commit1 unpaired Triton path active'
 ```
 
-## Benchmark
+### Benchmark
 
 Use the same TG128 gate: `pp=2048`, `tg=128`, `depth=0`, concurrency 1,
 generation latency, no prompt cache.
@@ -136,7 +140,12 @@ TOKENIZER=/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4
   --format json
 ```
 
-## Optimizations
+## Details
+
+Use this section if you want to understand what changed and why it improves
+throughput.
+
+### Optimizations
 
 | Optimization | What changed | Why it is faster |
 | --- | --- | --- |
@@ -148,7 +157,7 @@ TOKENIZER=/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4
 | Accepted-token metadata | `gdn_attn.py` carries the accepted token count into GDN metadata. | Lets the fast path choose the right state row directly, without an extra sync or guesswork. |
 | Strict fallback guards | The fast path only activates for the exact tested shape; all other requests use stock vLLM behavior. | Keeps the speedup narrow and safe instead of adding overhead or behavior changes to unrelated paths. |
 
-## Files
+### Files
 
 | File | Purpose |
 | --- | --- |
