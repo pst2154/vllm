@@ -9,6 +9,9 @@ Each cell uses 2 explicit warmup requests and 10 measured requests. llama-benchy
 
 ## Throughput Matrix
 
+Each value is the mean TPS of 10 measured TG128 requests at that concurrency.
+The columns are separate operating points and should not be averaged together.
+
 | Variant | c1 | c2 | c3 | c4 | c5 | c10 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Vanilla NVFP4 | 30.99 | 63.31 | 93.84 | 122.26 | 149.28 | 240.34 |
@@ -25,22 +28,9 @@ Each cell uses 2 explicit warmup requests and 10 measured requests. llama-benchy
 | DFlash k=15 | +47.92 / +154.6% | +45.97 / +72.6% | +48.60 / +51.8% | +43.25 / +35.4% | +26.71 / +17.9% | -8.80 / -3.7% |
 | DFlash k=15 + GDN T16 | +58.60 / +189.1% | +56.35 / +89.0% | +53.52 / +57.0% | +48.31 / +39.5% | +48.54 / +32.5% | +22.63 / +9.4% |
 
-## Average Progression
-
-Averaging concurrencies `1,2,3,4,5,10` gives the clearest single-number view of
-the sweep. MTP and DFlash are alternative speculative backends, so this is a
-recipe progression rather than a stack of all features at once.
-
-| Stage | Avg TG128 TPS | Gain vs previous | Gain vs vanilla |
-| --- | ---: | ---: | ---: |
-| Vanilla NVFP4 | 116.67 | baseline | baseline |
-| Native MTP | 145.87 | +29.20 / +25.0% | +29.20 / +25.0% |
-| DFlash k=15 | 150.61 | +4.74 / +3.2% | +33.94 / +29.1% |
-| DFlash k=15 + GDN T16 | 164.66 | +14.05 / +9.3% | +47.99 / +41.1% |
-
 ## c1 Progression
 
-| Stage | Avg TG128 TPS | Gain vs previous | Gain vs vanilla | Notes |
+| Stage | Mean TG128 TPS | Gain vs previous | Gain vs vanilla | Notes |
 | --- | ---: | ---: | ---: | --- |
 | Vanilla NVFP4 | 30.99 | baseline | baseline | Target model only, no speculative decoding. |
 | Native MTP | 44.52 | +13.53 / +43.7% | +13.53 / +43.7% | Native MTP speculation with num_speculative_tokens=1. |
