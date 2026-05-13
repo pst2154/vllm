@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Backend for GatedDeltaNet attention."""
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -62,10 +63,15 @@ class GDNAttentionMetadata:
     non_spec_token_indx: torch.Tensor | None = None
 
     num_accepted_tokens: torch.Tensor | None = None  # shape: [batch,]
+    num_accepted_tokens_cpu: torch.Tensor | None = None  # shape: [batch,]
 
     # Pre-computed FLA chunk metadata (avoids GPU->CPU sync in prepare_chunk_indices)
     chunk_indices: torch.Tensor | None = None
     chunk_offsets: torch.Tensor | None = None
+
+    # Contiguous single-request speculative state window for FlashInfer MTP GDN.
+    flashinfer_mtp_state_base: int | None = None
+    flashinfer_mtp_state_root: int | None = None
 
     # The following attributes are for triton implementation of causal_conv1d
     nums_dict: dict | None = None
@@ -175,6 +181,7 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
         )
 
         spec_sequence_masks_cpu: torch.Tensor | None = None
+        num_accepted_tokens_cpu: torch.Tensor | None = None
         if (
             not self.use_spec_decode
             or num_decode_draft_tokens_cpu is None
@@ -311,6 +318,10 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
                 )
 
             assert num_accepted_tokens is not None
+            assert num_decode_draft_tokens_cpu is not None
+            num_accepted_tokens_cpu = (
+                num_decode_draft_tokens_cpu[spec_sequence_masks_cpu] + 1
+            )
             num_accepted_tokens = num_accepted_tokens[spec_sequence_masks_cpu]
 
         chunk_indices: torch.Tensor | None = None
@@ -352,6 +363,28 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
         assert not (num_decodes > 0 and num_spec_decodes > 0), (
             f"num_decodes: {num_decodes}, num_spec_decodes: {num_spec_decodes}"
         )
+
+        flashinfer_mtp_state_base: int | None = None
+        flashinfer_mtp_state_root: int | None = None
+        if (
+            os.environ.get("VLLM_QWEN_GDN_FLASHINFER_MTP", "0") == "1"
+            and num_prefills == 0
+            and num_decodes == 0
+            and num_spec_decodes == 1
+            and spec_state_indices_tensor is not None
+            and num_accepted_tokens is not None
+        ):
+            # The FlashInfer MTP path can avoid a state copy only when all
+            # speculative state slots are one contiguous cache window.
+            state_indices_cpu = spec_state_indices_tensor[0].detach().cpu().tolist()
+            if state_indices_cpu:
+                base = int(state_indices_cpu[0])
+                expected = list(range(base, base + len(state_indices_cpu)))
+                if base != NULL_BLOCK_ID and state_indices_cpu == expected:
+                    accepted = int(num_accepted_tokens[0].detach().cpu().item())
+                    root_col = max(0, min(len(state_indices_cpu) - 1, accepted - 1))
+                    flashinfer_mtp_state_base = base
+                    flashinfer_mtp_state_root = int(state_indices_cpu[root_col])
 
         # Prepare tensors for cudagraph
         # Note: m.num_actual_tokens is already padded by the model runner for CUDAGraph
@@ -443,6 +476,9 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
             spec_token_indx=spec_token_indx,
             non_spec_token_indx=non_spec_token_indx,
             num_accepted_tokens=num_accepted_tokens,
+            num_accepted_tokens_cpu=num_accepted_tokens_cpu,
+            flashinfer_mtp_state_base=flashinfer_mtp_state_base,
+            flashinfer_mtp_state_root=flashinfer_mtp_state_root,
             nums_dict=nums_dict,
             batch_ptr=batch_ptr,
             token_chunk_offset_ptr=token_chunk_offset_ptr,
