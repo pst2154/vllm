@@ -76,8 +76,66 @@ highest c10 result.
 
 ### Run
 
-The tested setup used the Spark TF5 image and mounted this fork's edited GDN
-files into the container. Set the paths for your machine first:
+The easiest path is the prebuilt GHCR image. It bakes this fork's optimized
+vLLM Python/Triton files and starts with the winning recipe by default:
+DFlash k=15, fp16 GDN SSM cache, CUDA graphs disabled, and
+`VLLM_QWEN_GDN_T16_COMMIT1_UNPAIRED=1`.
+
+The image does not include model weights. Mount a directory that contains:
+
+- `Qwen3.6-35B-A3B-NVFP4`
+- `Qwen3.6-35B-A3B-DFlash`
+
+```bash
+export MODEL_ROOT=/path/to/models
+
+docker run -d \
+  --name qwen36-t16-commit1-unpaired \
+  --gpus all \
+  --ipc host \
+  --network host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -v "${MODEL_ROOT}:/models:ro" \
+  -v qwen36-moe-configs:/workspace/moe-configs \
+  ghcr.io/pst2154/vllm:qwen36-dflash-t16-spark
+```
+
+If your mounted model names differ, override them:
+
+```bash
+docker run -d \
+  --name qwen36-t16-commit1-unpaired \
+  --gpus all \
+  --ipc host \
+  --network host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -v "${MODEL_ROOT}:/models:ro" \
+  -v qwen36-moe-configs:/workspace/moe-configs \
+  -e QWEN36_MODEL_DIR=/models/Qwen3.6-35B-A3B-NVFP4 \
+  -e QWEN36_DFLASH_DIR=/models/Qwen3.6-35B-A3B-DFlash \
+  ghcr.io/pst2154/vllm:qwen36-dflash-t16-spark
+```
+
+Wait for health:
+
+```bash
+curl -fsS http://127.0.0.1:8000/health
+```
+
+Check that the fast path activated:
+
+```bash
+docker logs qwen36-t16-commit1-unpaired 2>&1 \
+  | grep 'Qwen GDN T16 commit1 unpaired Triton path active'
+```
+
+#### Source-Mount Fallback
+
+If you want to run from a local checkout instead of the prebuilt image, use the
+Spark TF5 base image and mount this fork's edited GDN files into the container.
+Set the paths for your machine first:
 
 ```bash
 export VLLM_REPO=/path/to/pst2154/vllm
