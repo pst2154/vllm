@@ -80,9 +80,9 @@ The tested setup used the Spark TF5 image and mounted this fork's edited GDN
 files into the container. Set the paths for your machine first:
 
 ```bash
-export VLLM_REPO=/home/asteiner/Git_Repos/vllm
-export MODEL_ROOT=/home/asteiner/models
-export MODS_DIR=/home/asteiner/Git_Repos/spark-vllm-docker/mods
+export VLLM_REPO=/path/to/pst2154/vllm
+export MODEL_ROOT=/path/to/models
+export MODS_DIR=/path/to/spark-vllm-docker/mods
 ```
 
 Start the server:
@@ -159,8 +159,8 @@ docker logs qwen36-t16-commit1-unpaired 2>&1 \
 Run two warmup passes, then five measured runs:
 
 ```bash
-BENCH=/home/asteiner/Git_Repos/vllm/.venv/bin/llama-benchy
-TOKENIZER=/home/asteiner/models/Qwen3.6-35B-A3B-NVFP4
+BENCH="${VLLM_REPO}/.venv/bin/llama-benchy"
+TOKENIZER="${MODEL_ROOT}/Qwen3.6-35B-A3B-NVFP4"
 
 "${BENCH}" \
   --base-url http://127.0.0.1:8000/v1 \
