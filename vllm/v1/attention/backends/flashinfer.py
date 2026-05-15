@@ -555,14 +555,19 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
         ) = None  # Wrapper for prefill/append
         self._decode_wrapper = None  # Wrapper for decode (general shape)
 
-        if envs.VLLM_BATCH_INVARIANT:
-            self.decode_fixed_split_size = 2048
-            self.prefill_fixed_split_size = 4096
-            self.disable_split_kv = True
-        else:
-            self.decode_fixed_split_size = -1
-            self.prefill_fixed_split_size = -1
-            self.disable_split_kv = False
+        # Issue #31856: pin FlashInfer's split-KV partition to a fixed page
+        # count so the merge_states reduce order is batch-size invariant. The
+        # heuristic in scheduler.cuh picks num_splits as a function of
+        # batch_size * gdy vs max_grid_size, producing different reduce
+        # orders for c=1 vs c>1 of the same prompt. The ~1e-7 per-row diff
+        # cascades through MoE layers and can flip marginal-precision NVFP4
+        # models into a deterministic repeat spiral. fixed_split_size keeps
+        # multi-CTA parallelism (no perf hit) while making reduce order
+        # deterministic. disable_split_kv is reserved for the stricter
+        # cudagraph determinism path opted in via VLLM_BATCH_INVARIANT.
+        self.decode_fixed_split_size = 2048
+        self.prefill_fixed_split_size = 4096
+        self.disable_split_kv = bool(envs.VLLM_BATCH_INVARIANT)
 
         self.compilation_config = vllm_config.compilation_config
         max_num_pages_per_req = cdiv(
