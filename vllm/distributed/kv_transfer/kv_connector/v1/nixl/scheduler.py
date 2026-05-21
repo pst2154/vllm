@@ -105,6 +105,16 @@ class NixlConnectorScheduler:
         # New requests are added by update_state_after_alloc in
         # the scheduler. Used to make metadata passed to Worker.
         self._reqs_need_recv: dict[ReqId, tuple[Request, BlockIds]] = {}
+        # Track P-side requests whose blocks are pinned in
+        # NixlConnectorWorker._reqs_to_send awaiting decode-side NIXL pull
+        # notification. Used so vLLM's engine busy loop keeps stepping
+        # (calling worker.get_finished) until either the pull notification
+        # arrives or the kv_lease_duration TTL expires. Without this, after
+        # the last user request finishes, the engine sits in
+        # input_queue.get(block=True) and the connector never gets a chance
+        # to process notifications -- prefill blocks stay pinned until the
+        # worker restarts.
+        self._pending_after_send: set[ReqId] = set()
         self._reqs_need_save: dict[ReqId, Request] = {}
         # Reqs to send and their expiration time
         self._reqs_need_send: dict[ReqId, float] = {}
@@ -576,6 +586,19 @@ class NixlConnectorScheduler:
         """Stop heartbeating for requests whose KV transfer completed."""
         for req_id in connector_output.finished_recving or ():
             self._stop_heartbeat(req_id)
+        # Released P-side blocks (either via D-side pull notification or
+        # kv_lease_duration TTL expiry in worker.get_finished) -- drop from
+        # pending tracking so the engine can return to idle.
+        for req_id in connector_output.finished_sending or ():
+            self._pending_after_send.discard(req_id)
+
+    def has_pending_kv_xfers(self) -> bool:
+        """Return True while worker-side NIXL still holds blocks for any
+        prior prefill request awaiting decode-side pull. The vLLM scheduler
+        uses this to keep the engine busy loop stepping so the connector's
+        notification + TTL drain code path inside worker.get_finished()
+        actually runs."""
+        return bool(self._pending_after_send)
 
     def request_finished(
         self,
@@ -653,6 +676,7 @@ class NixlConnectorScheduler:
             self._reqs_need_send[request.request_id] = (
                 time.perf_counter() + request_kv_blocks_ttl
             )
+            self._pending_after_send.add(request.request_id)
             # NOTE HMA will "mark" empty/null blocks in groups with 0s (eg SWA ones),
             # trimming down after allocating for the whole sequence length. Empty
             # blocks are always at the start of the list.

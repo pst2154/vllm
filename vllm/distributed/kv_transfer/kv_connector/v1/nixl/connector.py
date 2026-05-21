@@ -165,6 +165,14 @@ class NixlConnector(KVConnectorBase_V1, SupportsHMA):
         assert self.connector_scheduler is not None
         self.connector_scheduler.update_connector_output(connector_output)
 
+    def has_pending_kv_xfers(self) -> bool:
+        """Delegate to scheduler-side connector. True while P-side blocks
+        remain pinned awaiting decode-side NIXL pull notification, so the
+        vLLM scheduler keeps the engine busy loop stepping to drain them."""
+        if self.connector_scheduler is None:
+            return False
+        return self.connector_scheduler.has_pending_kv_xfers()
+
     def request_finished(
         self,
         request: "Request",

@@ -1882,7 +1882,23 @@ class Scheduler(SchedulerInterface):
         return num_waiting + len(self.running)
 
     def has_finished_requests(self) -> bool:
-        return len(self.finished_req_ids) > 0
+        # Also consider KV connector pending state: when a prior request's
+        # blocks are still pinned awaiting a remote KV pull notification
+        # (e.g. NIXL connector's worker-side _reqs_to_send), we must keep the
+        # engine busy loop stepping so the connector's notification/TTL
+        # drain code path inside worker.get_finished() actually runs.
+        # Without this, after the last user request finishes, the engine
+        # blocks indefinitely in input_queue.get(block=True) and the
+        # connector never frees those blocks -- they stay pinned until
+        # the worker restarts.
+        if len(self.finished_req_ids) > 0:
+            return True
+        if self.connector is not None and getattr(
+            self.connector, "has_pending_kv_xfers", None
+        ) is not None:
+            if self.connector.has_pending_kv_xfers():
+                return True
+        return False
 
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False
