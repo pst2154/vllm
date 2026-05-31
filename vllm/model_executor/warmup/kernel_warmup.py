@@ -125,11 +125,23 @@ def flashinfer_autotune(runner: "GPUModelRunner") -> None:
     Tuning is performed only on rank 0. The resulting cache is broadcast
     to every rank so all ranks dispatch the same kernel tactic.
     """
+    from flashinfer.fused_moe.utils import get_hybrid_num_tokens_buckets
+
     import vllm.utils.flashinfer as fi_utils
     from vllm.distributed.parallel_state import get_world_group
 
+    # Some long-decode workloads hit intermediate FP8 GEMM token buckets during
+    # inference. Tune the full runtime bucket set instead of only the shapes
+    # directly exercised by the dummy run.
+    tuning_buckets = get_hybrid_num_tokens_buckets(
+        runner.scheduler_config.max_num_batched_tokens
+    )
+
     if not _FLASHINFER_USE_PERSISTENT_CACHE:
-        with torch.inference_mode(), fi_utils.autotune():
+        with torch.inference_mode(), fi_utils.autotune(
+            tuning_buckets=tuning_buckets,
+            round_up=True,
+        ):
             runner._dummy_run(
                 num_tokens=runner.scheduler_config.max_num_batched_tokens,
                 skip_eplb=True,
@@ -146,9 +158,8 @@ def flashinfer_autotune(runner: "GPUModelRunner") -> None:
         logger.info("Using FlashInfer autotune cache file: %s", cache_path)
 
     # We skip EPLB here since we don't want to record dummy metrics.
-    # When autotuning with number of tokens m, flashinfer will autotune
-    # operations for all number of tokens up to m, so we only need to
-    # run with the max number of tokens.
+    # Use the max token count so autotuning covers the complete runtime bucket
+    # set requested above.
     dummy_run_kwargs = dict(
         num_tokens=runner.scheduler_config.max_num_batched_tokens,
         skip_eplb=True,
@@ -157,7 +168,12 @@ def flashinfer_autotune(runner: "GPUModelRunner") -> None:
 
     with torch.inference_mode():
         if is_leader:
-            with fi_utils.autotune(tune_mode=True, cache=str(cache_path)):
+            with fi_utils.autotune(
+                tune_mode=True,
+                cache=str(cache_path),
+                tuning_buckets=tuning_buckets,
+                round_up=True,
+            ):
                 runner._dummy_run(**dummy_run_kwargs)
         else:
             runner._dummy_run(**dummy_run_kwargs)
