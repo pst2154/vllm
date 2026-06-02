@@ -77,6 +77,17 @@ class TrtLlmNvFp4ExpertsBase:
         else:
             self.gemm1_clamp_limit = None
 
+        if (
+            self.gemm1_clamp_limit is not None
+            and current_platform.is_device_capability((10, 3))
+        ):
+            logger.warning_once(
+                "Disabling FlashInfer TRTLLM NvFp4 MoE gemm1_clamp_limit on "
+                "SM103 because the clamp path is not supported by the current "
+                "FlashInfer kernels."
+            )
+            self.gemm1_clamp_limit = None
+
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         layer.w13_weight_scale_2.data.mul_(layer.w13_input_scale)
         layer.w2_weight_scale_2.data.mul_(layer.w2_input_scale)
