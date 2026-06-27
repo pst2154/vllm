@@ -22,6 +22,25 @@ from vllm.v1.worker.gpu.model_runner import GPUModelRunner
 
 logger = init_logger(__name__)
 
+_DEEPSEEK_V4_SPARSE_BACKENDS = {
+    "FLASHMLA_SPARSE_DSV4",
+    "FLASHINFER_MLA_SPARSE_DSV4",
+    "ROCM_FLASHMLA_SPARSE_DSV4",
+    "DEEPSEEK_SPARSE_SWA",
+}
+
+
+def _has_deepseek_v4_sparse_backend(model_runner: GPUModelRunner) -> bool:
+    for groups in model_runner.attn_groups:
+        for group in groups:
+            try:
+                backend_name = group.backend.get_name()
+            except NotImplementedError:
+                continue
+            if backend_name in _DEEPSEEK_V4_SPARSE_BACKENDS:
+                return True
+    return False
+
 
 def run_mixed_prefill_decode_warmup(
     model_runner: GPUModelRunner,
@@ -33,7 +52,11 @@ def run_mixed_prefill_decode_warmup(
     req_id_prefix: str = "_v2_mixed_warmup",
 ) -> bool:
     """Run a V2 mixed prefill+decode step through normal scheduler inputs."""
-    if model_runner.is_pooling_model or num_tokens < 3:
+    if (
+        model_runner.is_pooling_model
+        or num_tokens < 3
+        or model_runner.scheduler_config.max_num_seqs < 2
+    ):
         return False
 
     decode_req_id = f"{req_id_prefix}_decode_"
@@ -163,6 +186,13 @@ def warmup_kernels(
     decode_query_len + 1 prompt tokens each. The second iteration simulates
     a decode step with all requests generating decode_query_len tokens.
     """
+    if _has_deepseek_v4_sparse_backend(model_runner):
+        logger.info(
+            "Skipping generic V2 warmup for DeepSeek V4 sparse attention; "
+            "the model-specific sparse warmup runs separately."
+        )
+        return
+
     num_spec_steps = model_runner.num_speculative_steps
     decode_query_len = model_runner.decode_query_len
     # Use decode_query_len + 1 tokens so the prefill batch's per-request query

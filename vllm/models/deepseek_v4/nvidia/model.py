@@ -950,6 +950,17 @@ class DeepseekV4Model(nn.Module):
         self.hc_mult = config.hc_mult
         self.hc_dim = self.hc_mult * config.hidden_size
         self.rms_norm_eps = config.rms_norm_eps
+        speculative_config = vllm_config.speculative_config
+        enable_dspark_target_states = (
+            speculative_config is not None
+            and speculative_config.method == "dspark"
+        )
+        self.dspark_target_layer_ids = (
+            tuple(getattr(config, "dspark_target_layer_ids", ()) or ())
+            if enable_dspark_target_states
+            else ()
+        )
+        self.dspark_target_layer_id_set = set(self.dspark_target_layer_ids)
 
         # Three aux streams: one per non-default input GEMM in
         # DeepseekV4Attention.attn_gemm_parallel_execute
@@ -1021,8 +1032,17 @@ class DeepseekV4Model(nn.Module):
                 self.hc_dim,
                 dtype=vllm_config.model_config.dtype,
             )
+            if self.dspark_target_layer_ids:
+                self._dspark_hidden_buffer = torch.empty(
+                    vllm_config.scheduler_config.max_num_batched_tokens,
+                    len(self.dspark_target_layer_ids) * config.hidden_size,
+                    dtype=vllm_config.model_config.dtype,
+                )
+            else:
+                self._dspark_hidden_buffer = None
         else:
             self._mtp_hidden_buffer = None
+            self._dspark_hidden_buffer = None
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -1068,6 +1088,7 @@ class DeepseekV4Model(nn.Module):
             input_ids = input_ids.to(torch.int64)
 
         residual, post_mix, res_mix = None, None, None
+        dspark_hidden_states: list[torch.Tensor] = []
         for layer in islice(self.layers, self.start_layer, self.end_layer):
             hidden_states, residual, post_mix, res_mix = layer(
                 hidden_states,
@@ -1077,6 +1098,13 @@ class DeepseekV4Model(nn.Module):
                 res_mix,
                 residual,
             )
+            if self.dspark_target_layer_ids:
+                layer_idx = extract_layer_index(layer.attn.prefix)
+                if layer_idx in self.dspark_target_layer_id_set:
+                    layer_output = mhc_post_tilelang(
+                        hidden_states, residual, post_mix, res_mix
+                    )
+                    dspark_hidden_states.append(layer_output.mean(dim=1))
         if layer is not None:
             hidden_states = mhc_post_tilelang(
                 hidden_states, residual, post_mix, res_mix
@@ -1088,6 +1116,9 @@ class DeepseekV4Model(nn.Module):
         # Stash pre-hc_head residual for the MTP draft (captured copy_).
         num_tokens = hidden_states.shape[0]
         self._mtp_hidden_buffer[:num_tokens].copy_(hidden_states.flatten(1))
+        if dspark_hidden_states:
+            dspark_hidden = torch.cat(dspark_hidden_states, dim=-1)
+            self._dspark_hidden_buffer[:num_tokens].copy_(dspark_hidden)
 
         hidden_states = hc_head_fused_kernel_tilelang(
             hidden_states,
@@ -1404,6 +1435,9 @@ class DeepseekV4ForCausalLM(nn.Module, SupportsPP, DeepseekV4MixtureOfExperts):
         """Pre-hc_head residual stream buffer (max_num_batched_tokens,
         hc_mult * hidden_size) for the MTP draft model. Populated by
         forward(); valid after each target step."""
+        dspark_hidden = getattr(self.model, "_dspark_hidden_buffer", None)
+        if dspark_hidden is not None:
+            return dspark_hidden
         return getattr(self.model, "_mtp_hidden_buffer", None)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:

@@ -21,11 +21,13 @@ elif current_platform.is_xpu():
     from .xpu.model import DeepseekV4ForCausalLM  # type: ignore[assignment]
     from .xpu.mtp import DeepSeekV4MTP  # type: ignore[assignment]
 else:
+    from .nvidia.dspark import DeepSeekV4DSpark  # type: ignore[assignment]
     from .nvidia.model import DeepseekV4ForCausalLM  # type: ignore[assignment]
     from .nvidia.mtp import DeepSeekV4MTP  # type: ignore[assignment]
 
 __all__ = [
     "DeepSeekV4MTP",
+    "DeepSeekV4DSpark",
     "DeepseekV4FP8Config",
     "DeepseekV4ForCausalLM",
 ]

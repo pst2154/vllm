@@ -3,6 +3,7 @@
 import hashlib
 import importlib
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -2026,6 +2027,45 @@ def test_get_kv_cache_spec_kind_unknown_for_mixed_uniform_type_specs():
         },
     )
     assert get_kv_cache_spec_kind(uniform_mixed_spec) == KVCacheSpecKind.UNKNOWN
+
+
+def test_deepseek_v4_groups_auxiliary_attention_cache():
+    kv_cache_specs = {
+        "target.mla": new_mla_spec(),
+        "target.swa": SlidingWindowMLASpec(
+            block_size=16,
+            num_kv_heads=1,
+            head_size=576,
+            dtype=torch.float32,
+            sliding_window=128,
+        ),
+        "draft.0": SlidingWindowSpec(
+            block_size=16,
+            num_kv_heads=1,
+            head_size=64,
+            dtype=torch.float32,
+            sliding_window=128,
+        ),
+        "draft.1": SlidingWindowSpec(
+            block_size=16,
+            num_kv_heads=1,
+            head_size=64,
+            dtype=torch.float32,
+            sliding_window=128,
+        ),
+    }
+    vllm_config = SimpleNamespace(
+        scheduler_config=SimpleNamespace(disable_hybrid_kv_cache_manager=False),
+        speculative_config=None,
+    )
+
+    groups = kv_cache_utils.get_kv_cache_groups(vllm_config, kv_cache_specs)
+
+    grouped_names = {name for group in groups for name in group.layer_names}
+    assert grouped_names == set(kv_cache_specs)
+    draft_group = next(group for group in groups if "draft.0" in group.layer_names)
+    assert isinstance(draft_group.kv_cache_spec, UniformTypeKVCacheSpecs)
+    assert set(draft_group.layer_names) == {"draft.0", "draft.1"}
 
 
 def test_get_kv_cache_spec_sliding_window_reads_windowed_specs():

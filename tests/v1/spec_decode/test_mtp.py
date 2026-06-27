@@ -31,6 +31,24 @@ mimo_7b_dir = "XiaomiMiMo/MiMo-7B-Base"
 DEVICE_TYPE = current_platform.device_type
 
 
+class _DummyHFConfig:
+    model_type = "deepseek_v4"
+    architectures = ["DeepseekV4ForCausalLM"]
+    num_nextn_predict_layers = 1
+    dspark_block_size = 5
+
+    def update(self, values):
+        for key, value in values.items():
+            setattr(self, key, value)
+
+
+def test_deepseek_v4_dspark_uses_dedicated_draft_config():
+    config = SpeculativeConfig.hf_config_override(_DummyHFConfig())
+    assert config.model_type == "deepseek_v4_dspark"
+    assert config.architectures == ["DeepSeekV4DSparkModel"]
+    assert config.n_predict == 5
+
+
 def _create_mtp_proposer(num_speculative_tokens: int) -> EagleProposer:
     """Create an MTP proposer with unified model configuration."""
     model_config = ModelConfig(

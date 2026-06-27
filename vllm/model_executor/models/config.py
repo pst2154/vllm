@@ -176,6 +176,16 @@ class DiffusionGemmaModelForBlockDiffusionConfig(VerifyAndUpdateConfig):
 class DeepseekV4ForCausalLMConfig(VerifyAndUpdateConfig):
     @staticmethod
     def verify_and_update_model_config(model_config: "ModelConfig") -> None:
+        hf_config = model_config.hf_config
+        if getattr(hf_config, "dspark_block_size", 0):
+            n_dspark_layers = getattr(hf_config, "n_mtp_layers", None)
+            if n_dspark_layers is None:
+                compress_ratios = getattr(hf_config, "compress_ratios", None) or ()
+                n_dspark_layers = max(
+                    1, len(compress_ratios) - hf_config.num_hidden_layers
+                )
+                hf_config.update({"n_mtp_layers": n_dspark_layers})
+
         quant_config = getattr(model_config.hf_config, "quantization_config", None)
         if quant_config is not None and quant_config.get("quant_method") == "fp8":
             model_type = getattr(model_config.hf_config, "model_type", None)

@@ -47,6 +47,15 @@ def _layer_type_for(compress_ratio: int) -> str:
     )
 
 
+def _get_decode_threshold(vllm_config: VllmConfig) -> int:
+    speculative_config = vllm_config.speculative_config
+    if speculative_config is None:
+        return 1
+    num_speculative_tokens = speculative_config.num_speculative_tokens or 0
+    query_multiplier = 2 if speculative_config.parallel_drafting else 1
+    return 1 + query_multiplier * num_speculative_tokens
+
+
 class DeepseekV4SWACache(torch.nn.Module, AttentionLayerBase):
     def __init__(
         self,
@@ -305,18 +314,9 @@ class DeepseekSparseSWAMetadataBuilder(AttentionMetadataBuilder):
             self.vllm_config.scheduler_config.max_num_batched_tokens
         )
 
-        # Handle MTP: adjust decode_threshold like the indexer does
-        self.num_speculative_tokens = (
-            self.vllm_config.speculative_config.num_speculative_tokens
-            if self.vllm_config.speculative_config
-            else 0
-        )
-        # With MTP, decode can have query_len up to 1 + num_speculative_tokens.
-        # Must match the threshold used by the indexer and flashmla_sparse so
-        # that all backends agree on the decode/prefill split.
-        self.decode_threshold = (
-            self.reorder_batch_threshold + self.num_speculative_tokens
-        )
+        # Keep this split identical to AttentionMetadataBuilder's threshold.
+        # Parallel drafters schedule both proposal and verification positions.
+        self.decode_threshold = _get_decode_threshold(self.vllm_config)
 
         hf_config = self.vllm_config.model_config.hf_config
         assert hasattr(hf_config, "sliding_window")

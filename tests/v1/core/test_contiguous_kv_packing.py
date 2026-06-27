@@ -126,6 +126,25 @@ class TestInterleavedPacking:
         for t in tensors:
             assert t.offset < t.block_stride
 
+    def test_packed_stride_honors_mla_alignment_with_draft_pages(self):
+        groups = _make_groups(n_c4=3, n_c128=2, n_swa=5)
+        draft_specs = {f"draft.{i}": _make_sw_spec() for i in range(3)}
+        groups.append(
+            KVCacheGroupSpec(
+                layer_names=list(draft_specs),
+                kv_cache_spec=UniformTypeKVCacheSpecs(
+                    block_size=16, kv_cache_specs=draft_specs
+                ),
+            )
+        )
+
+        num_blocks, tensors = _get_kv_cache_config_packed(
+            _mock_vllm_config(), groups, 100 * 1024 * 1024
+        )
+
+        assert num_blocks > 0
+        assert {tensor.block_stride % 576 for tensor in tensors} == {0}
+
     def test_all_layers_accounted_for(self):
         n_c4, n_c128, n_swa = 5, 4, 7
         _, tensors = _run(n_c4=n_c4, n_c128=n_c128, n_swa=n_swa)

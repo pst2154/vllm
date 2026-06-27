@@ -1289,6 +1289,22 @@ def _get_kv_cache_config_packed(
     # buckets = {page_size: [[layer_names], [layer_names], ...]}
     buckets = _bucket_layers_by_page_size(kv_cache_groups)
     total_num_bytes_per_block = sum(ps * len(slots) for ps, slots in buckets.items())
+    alignments = []
+    for group in kv_cache_groups:
+        specs = (
+            group.kv_cache_spec.kv_cache_specs.values()
+            if isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+            else [group.kv_cache_spec]
+        )
+        alignments.extend(
+            alignment
+            for spec in specs
+            if (alignment := getattr(spec, "alignment", None)) is not None
+        )
+    if alignments:
+        total_num_bytes_per_block = round_up(
+            total_num_bytes_per_block, math.lcm(*alignments)
+        )
 
     num_blocks = available_memory // total_num_bytes_per_block
     num_blocks = may_override_num_blocks(vllm_config, num_blocks)
@@ -1731,6 +1747,27 @@ def get_kv_cache_groups(
         # attention in different sizes. Need to group layers into multiple
         # UniformTypeKVCacheSpecs.
         kv_cache_groups = _get_kv_cache_groups_uniform_groups(grouped_specs)
+        grouped_layer_names = {
+            layer_name for group in kv_cache_groups for layer_name in group.layer_names
+        }
+        remaining_specs = {
+            layer_name: spec
+            for layer_name, spec in kv_cache_spec.items()
+            if layer_name not in grouped_layer_names
+        }
+        if remaining_specs:
+            remaining_uniform_spec = UniformTypeKVCacheSpecs.from_specs(remaining_specs)
+            if remaining_uniform_spec is None:
+                raise ValueError(
+                    "DeepSeek V4 auxiliary attention layers must use one "
+                    "uniform KV cache type."
+                )
+            kv_cache_groups.append(
+                KVCacheGroupSpec(
+                    layer_names=list(remaining_specs),
+                    kv_cache_spec=remaining_uniform_spec,
+                )
+            )
         _annotate_eagle_groups_deepseek_v4(vllm_config, kv_cache_spec, kv_cache_groups)
         return kv_cache_groups
 

@@ -54,8 +54,14 @@ MTPModelTypes = Literal[
 ]
 NgramGPUTypes = Literal["ngram_gpu"]
 DFlashModelTypes = Literal["dflash"]
+DSparkModelTypes = Literal["dspark"]
 EagleModelTypes = Literal[
-    "eagle", "eagle3", "extract_hidden_states", MTPModelTypes, DFlashModelTypes
+    "eagle",
+    "eagle3",
+    "extract_hidden_states",
+    MTPModelTypes,
+    DFlashModelTypes,
+    DSparkModelTypes,
 ]
 SpeculativeMethod = Literal[
     "ngram",
@@ -289,6 +295,7 @@ class SpeculativeConfig:
             "eagle3",
             "extract_hidden_states",
             "dflash",
+            "dspark",
         )
         factors.append(uses_aux_hidden_states)
 
@@ -321,11 +328,31 @@ class SpeculativeConfig:
                 {"n_predict": n_predict, "architectures": ["DeepSeekMTPModel"]}
             )
         if hf_config.model_type == "deepseek_v4":
-            hf_config.model_type = "deepseek_mtp"
-            n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
-            hf_config.update(
-                {"n_predict": n_predict, "architectures": ["DeepSeekV4MTPModel"]}
-            )
+            if getattr(hf_config, "dspark_block_size", 0):
+                hf_config.model_type = "deepseek_v4_dspark"
+                n_dspark_layers = getattr(hf_config, "n_mtp_layers", None)
+                if n_dspark_layers is None:
+                    compress_ratios = getattr(hf_config, "compress_ratios", None) or ()
+                    n_dspark_layers = max(
+                        1, len(compress_ratios) - hf_config.num_hidden_layers
+                    )
+                hf_config.update(
+                    {
+                        "n_predict": hf_config.dspark_block_size,
+                        "n_mtp_layers": n_dspark_layers,
+                        "ptd_token_id": hf_config.dspark_noise_token_id,
+                        "architectures": ["DeepSeekV4DSparkModel"],
+                    }
+                )
+            else:
+                hf_config.model_type = "deepseek_mtp"
+                n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
+                hf_config.update(
+                    {
+                        "n_predict": n_predict,
+                        "architectures": ["DeepSeekV4MTPModel"],
+                    }
+                )
         if hf_config.model_type in ("pangu_ultra_moe"):
             hf_config.model_type = "pangu_ultra_moe_mtp"
         if hf_config.model_type == "pangu_ultra_moe_mtp":
@@ -593,9 +620,11 @@ class SpeculativeConfig:
             self.method = "mtp"
 
         if self.model is None and self.num_speculative_tokens is not None:
-            if self.method == "mtp":
+            if self.method in ("mtp", "dspark"):
                 if self.target_model_config is None:
-                    raise ValueError("target_model_config must be present for mtp")
+                    raise ValueError(
+                        "target_model_config must be present for mtp/dspark"
+                    )
                 if self.target_model_config.hf_text_config.model_type == "deepseek_v32":
                     # FIXME(luccafong): cudagraph with v32 MTP is not supported,
                     # remove this when the issue is fixed.
@@ -733,7 +762,7 @@ class SpeculativeConfig:
                 )
 
                 # Automatically detect the method
-                if self.method in ("eagle", "eagle3", "dflash"):
+                if self.method in ("eagle", "eagle3", "dflash", "dspark"):
                     pass
                 # examples:
                 # yuhuili/EAGLE-LLaMA3-Instruct-8B
@@ -791,7 +820,7 @@ class SpeculativeConfig:
                         self.draft_model_config.hf_config = eagle_config
                         self.update_arch_()
 
-                if self.method == "dflash":
+                if self.method in ("dflash", "dspark"):
                     self.parallel_drafting = True
 
                 if self.num_speculative_tokens is not None and hasattr(
@@ -1107,7 +1136,7 @@ class SpeculativeConfig:
         )
 
     def use_eagle(self) -> bool:
-        return self.method in ("eagle", "eagle3", "mtp", "dflash")
+        return self.method in ("eagle", "eagle3", "mtp", "dflash", "dspark")
 
     def use_dflash(self) -> bool:
         return self.method == "dflash"

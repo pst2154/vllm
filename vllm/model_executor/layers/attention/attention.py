@@ -592,9 +592,9 @@ class Attention(nn.Module, AttentionLayerBase):
         assert self.attn_type == AttentionType.DECODER
         quant_mode = get_kv_quant_mode(self.kv_cache_dtype)
         if self.sliding_window is not None:
-            assert not vllm_config.model_config.use_mla, (
-                "MLA is not supported for slidingwindow"
-            )
+            # This module is always standard attention (the backend selector is
+            # called with use_mla=False). A target model may still use MLA in
+            # other layers, such as a non-MLA speculative draft head.
             return SlidingWindowSpec(
                 block_size=block_size,
                 num_kv_heads=self.num_kv_heads,

@@ -524,6 +524,15 @@ class VllmConfig:
         if use_v2_model_runner is not None:
             return use_v2_model_runner
 
+        # DSpark is implemented only by the V2 GPU model runner. DeepSeek V4 is
+        # not otherwise a default-V2 architecture, so select V2 explicitly for
+        # this speculative decoding method.
+        if (
+            self.speculative_config is not None
+            and self.speculative_config.method == "dspark"
+        ):
+            return True
+
         if self.model_config is not None and self.model_config.is_diffusion:
             return True
 
@@ -2028,7 +2037,13 @@ class VllmConfig:
             # TODO: ngram / ngram_gpu are not supported by the v2 model runner yet
             if speculative_config.method in ("ngram", "ngram_gpu"):
                 unsupported.append("ngram/ngram_gpu speculative decoding")
-            elif speculative_config.method not in ("eagle", "eagle3", "mtp", "dflash"):
+            elif speculative_config.method not in (
+                "eagle",
+                "eagle3",
+                "mtp",
+                "dflash",
+                "dspark",
+            ):
                 unsupported.append(f"speculative method '{speculative_config.method}'")
 
             if speculative_config.uses_dynamic_speculative_decoding():
@@ -2038,7 +2053,7 @@ class VllmConfig:
             # DFlash uses parallel drafting natively in V2 via DFlashSpeculator.
             if (
                 speculative_config.parallel_drafting
-                and speculative_config.method != "dflash"
+                and speculative_config.method not in ("dflash", "dspark")
             ):
                 unsupported.append("parallel drafting for EAGLE speculative decoding")
 
