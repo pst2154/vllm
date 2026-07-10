@@ -177,6 +177,10 @@ _TEXT_GENERATION_MODELS = {
     "NemotronForCausalLM": ("nemotron", "NemotronForCausalLM"),
     "NemotronHForCausalLM": ("nemotron_h", "NemotronHForCausalLM"),
     "NemotronHPuzzleForCausalLM": ("nemotron_h", "NemotronHForCausalLM"),
+    "NemotronLabsDiffusionModel": (
+        "nemotron_dllm",
+        "NemotronLabsDiffusionForBlockDiffusion",
+    ),
     "MuseGlimmerForCausalLM": ("muse_glimmer", "MuseGlimmerForCausalLM"),
     "OlmoHybridForCausalLM": ("olmo_hybrid", "OlmoHybridForCausalLM"),
     "OlmoeForCausalLM": ("olmoe", "OlmoeForCausalLM"),
