@@ -221,6 +221,27 @@ can occur due to following factors:
 
 For mitigation strategies, please refer to the FAQ entry *Can the output of a prompt vary across runs in vLLM?* in the [FAQs](../../usage/faq.md).
 
+## LiLiCorr DFlash checkpoints
+
+[LiLiCorr](https://arxiv.org/abs/2608.20530) reranks the top candidates from
+each DFlash position as a single candidate lattice. A checkpoint selects this
+path by declaring `architectures: ["LiLiCorrDraftModel"]` and recording its
+`lilicorr_*` head geometry in `dflash_config`. Serve it with the regular DFlash
+method:
+
+```bash
+vllm serve <target-model> \
+  --speculative-config '{
+    "method": "dflash",
+    "model": "<lilicorr-draft-model>",
+    "num_speculative_tokens": 15
+  }'
+```
+
+`num_speculative_tokens` must match the number of candidate slots for which the
+head was trained. vLLM validates the checkpoint's head geometry and weights at
+load time and refuses partial or incompatible heads.
+
 ## Known Feature Incompatibility
 
 1. Pipeline parallelism is not composable with speculative decoding as of `vllm<=0.15.0`

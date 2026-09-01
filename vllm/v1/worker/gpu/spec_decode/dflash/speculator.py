@@ -276,6 +276,14 @@ class DFlashSpeculator(DraftModelSpeculator):
             num_reqs, self.num_speculative_steps
         )
 
+    def _set_context_hidden_states(
+        self,
+        hidden_states: torch.Tensor,
+        input_batch: InputBatch,
+        num_rejected: torch.Tensor,
+    ) -> None:
+        pass
+
     def _build_draft_attn_metadata(
         self,
         num_reqs: int,
@@ -350,6 +358,7 @@ class DFlashSpeculator(DraftModelSpeculator):
         else:
             hidden_states = last_hidden_states
         self.hidden_states[:num_target_tokens].copy_(hidden_states[:num_target_tokens])
+        self._set_context_hidden_states(hidden_states, input_batch, num_rejected)
 
         if dummy_run and skip_attn_for_dummy_run:
             # Memory profiling path: block_tables / kv_cache_config are not initialized.
