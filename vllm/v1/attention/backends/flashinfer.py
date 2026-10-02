@@ -883,6 +883,21 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
 
         self._cascade_wrapper = None  # Wrapper for cascade attention
 
+        # Fused multi-step draft decode reuses one metadata build across the
+        # autoregressive draft steps, so they can be captured in one CUDA
+        # graph. On the XQA / trtllm-gen decode path every step-dependent
+        # input is a device tensor that the speculator advances in place
+        # (seq_lens, block tables, slot mappings), and max_seq_len is the
+        # speculator's upper bound over all draft steps, so no refresh is
+        # needed (as for the Triton backend). The native FlashInfer decode
+        # wrappers are planned on the host per step, and DCP local sequence
+        # lengths are not advanced between draft steps, so both are excluded.
+        self.supports_draft_decode_metadata_update = (
+            envs.VLLM_FLASHINFER_FUSED_DRAFT_DECODE
+            and self.use_trtllm_decode_attention
+            and not self.use_dcp
+        )
+
         # Global hyperparameters shared by all attention layers
         # TODO: discard this for trtllm-gen backend
         per_layer_parameters = get_per_layer_parameters(
@@ -1770,6 +1785,26 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                 )
                 attn_metadata.decode = FIDecode(wrapper=decode_wrapper)
         return attn_metadata
+
+    def update_draft_decode_metadata(self, metadata: FlashInferMetadata) -> None:
+        # Only reachable when supports_draft_decode_metadata_update is set,
+        # i.e. on the XQA / trtllm-gen decode path. The decode kernels read
+        # seq_lens, block tables and the slot mapping from persistent device
+        # tensors that the speculator updates in place between draft steps,
+        # so there is nothing to refresh. Guard against any metadata form
+        # that carries host-planned state.
+        if metadata.decode is not None and not isinstance(
+            metadata.decode, FlashInferTrtllmAPIDecode
+        ):
+            raise RuntimeError(
+                "Fused draft decode requires FlashInfer XQA / trtllm-gen "
+                "decode metadata."
+            )
+        if metadata.prefill is not None:
+            raise RuntimeError(
+                "Fused draft decode metadata must not contain a prefill part."
+            )
+        assert not metadata.use_cascade
 
     def use_cascade_attention(self, *args, **kwargs) -> bool:
         if self.kv_cache_spec.dtype != self.vllm_config.model_config.dtype:
