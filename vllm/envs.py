@@ -128,6 +128,7 @@ if TYPE_CHECKING:
     VLLM_USE_HW_AGNOSTIC: bool = False
     VLLM_ENABLE_FLA_PACKED_RECURRENT_DECODE: bool = True
     VLLM_GDN_DECODE_KERNEL: Literal["cuda", "triton"] = "cuda"
+    VLLM_SPEC_DRAFT_SHARDED_ARGMAX: bool = False
     VLLM_DISABLE_PYNCCL: bool = False
     VLLM_USE_OINK_OPS: bool = False
     VLLM_MXFP8_EMULATION_DEQUANT_AT_LOAD: bool = True
@@ -1213,6 +1214,16 @@ environment_variables: dict[str, Callable[[], Any]] = {
         "cuda",
         ["cuda", "triton"],
         case_sensitive=False,
+    ),
+    # If set, greedy draft tokens of model runner V2 speculators are chosen
+    # by an exact per-vocab-shard argmax plus a 64-byte-per-row exchange of
+    # candidates across TP ranks, instead of all-gathering the full-vocab
+    # draft logits. Same token as torch.argmax (NaN first, ties to the lowest
+    # id). Falls back automatically when the full logits are needed
+    # (probabilistic drafting, acceptance estimator, draft watermarking) or
+    # the lm_head layout is not supported.
+    "VLLM_SPEC_DRAFT_SHARDED_ARGMAX": lambda: bool(
+        int(os.getenv("VLLM_SPEC_DRAFT_SHARDED_ARGMAX", "0"))
     ),
     # Disable pynccl (using torch.distributed instead)
     "VLLM_DISABLE_PYNCCL": lambda: (

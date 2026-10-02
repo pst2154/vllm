@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+import vllm.envs as envs
 from vllm.config import VllmConfig, get_layers_from_vllm_config
 from vllm.config.compilation import CUDAGraphMode
 from vllm.distributed.eplb.eplb_state import EplbState
@@ -35,6 +36,10 @@ from vllm.v1.worker.gpu.model_states.interface import ModelState
 from vllm.v1.worker.gpu.sample.gumbel import gumbel_sample
 from vllm.v1.worker.gpu.spec_decode.acceptance_estimator import (
     OnlineAcceptanceEstimator,
+)
+from vllm.v1.worker.gpu.spec_decode.sharded_argmax import (
+    sharded_draft_argmax,
+    sharded_draft_argmax_unsupported_reason,
 )
 from vllm.v1.worker.utils import AttentionGroup
 
@@ -196,6 +201,9 @@ class DraftModelSpeculator(BaseSpeculator):
                 watermark_config.allow_target_only_watermarking,
             )
 
+        # Resolved in load_model() (VLLM_SPEC_DRAFT_SHARDED_ARGMAX).
+        self.use_sharded_draft_argmax = False
+
         self.supports_mm_inputs = False
         self.pcp_manager: PCPManager | None = None
 
@@ -252,6 +260,7 @@ class DraftModelSpeculator(BaseSpeculator):
                 self.num_speculative_steps,
                 self.device,
             )
+        self._configure_sharded_draft_argmax()
 
     def set_eplb_state(self, eplb_state: EplbState) -> None:
         """Inject EPLB state after construction."""
@@ -397,6 +406,25 @@ class DraftModelSpeculator(BaseSpeculator):
             "(communication: O(2*tp_size) vs O(vocab_size))."
         )
 
+    def _configure_sharded_draft_argmax(self) -> None:
+        if not envs.VLLM_SPEC_DRAFT_SHARDED_ARGMAX:
+            return
+        reason = sharded_draft_argmax_unsupported_reason(self)
+        self.use_sharded_draft_argmax = reason is None
+        if reason is None:
+            logger.info(
+                "Using the sharded exact argmax for greedy draft tokens "
+                "(communication: 64 bytes per row and rank instead of the "
+                "full-vocab logits)."
+            )
+        else:
+            logger.info(
+                "VLLM_SPEC_DRAFT_SHARDED_ARGMAX is set but not used for "
+                "draft model %s: %s.",
+                type(self.model).__name__,
+                reason,
+            )
+
     def sample_draft(
         self,
         hidden_states: torch.Tensor,
@@ -430,6 +458,12 @@ class DraftModelSpeculator(BaseSpeculator):
                 )
         elif self.use_local_argmax_reduction:
             return self.model.get_top_tokens(hidden_states)
+        elif self.use_sharded_draft_argmax:
+            # Same token as compute_logits(...).argmax(-1) below, without
+            # gathering the full-vocab logits.
+            return sharded_draft_argmax(
+                self.model.lm_head, self.model.logits_processor, hidden_states
+            )
         else:
             logits = self.model.compute_logits(hidden_states)
             sampled = logits.argmax(dim=-1)
