@@ -2075,6 +2075,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # inline on the current stream, as without the overlap.
     "VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP_MAX_TOKENS": lambda: int(
         os.getenv("VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP_MAX_TOKENS", "256")
+    ),
     # With the FlashInfer Mamba SSU backend and Mamba cache stochastic
     # rounding enabled, draw the per-layer stochastic-rounding seeds of a
     # forward pass up front on a side CUDA stream (same values, same order as
