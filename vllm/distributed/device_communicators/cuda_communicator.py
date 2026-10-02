@@ -25,6 +25,10 @@ from .base_device_communicator import DeviceCommunicatorBase
 
 logger = init_logger(__name__)
 
+# VLLM_CUSTOM_ALL_GATHER_SMALL: the first routed all-gather is logged once per
+# process (engagement check).
+_custom_all_gather_small_logged = False
+
 
 class CudaCommunicator(DeviceCommunicatorBase):
     def __init__(
@@ -480,6 +484,17 @@ class CudaCommunicator(DeviceCommunicatorBase):
         output = ca_comm.ipc_all_gather(input_)
         if output is None:
             return None
+        global _custom_all_gather_small_logged
+        if not _custom_all_gather_small_logged:
+            _custom_all_gather_small_logged = True
+            logger.info(
+                "Small all-gathers (<= %d bytes per rank) use the one-shot "
+                "CUDA-IPC all-gather (first: %s %s, dim=%d).",
+                self.custom_all_gather_small_max_bytes,
+                tuple(input_.shape),
+                input_.dtype,
+                dim,
+            )
         # Same layout as the NCCL path below: gather along dim 0, then move
         # the rank dimension next to `dim`.
         input_size = input_.size()
