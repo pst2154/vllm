@@ -298,6 +298,7 @@ if TYPE_CHECKING:
     VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD: int = 1024
     VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP: bool = False
     VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP_MAX_TOKENS: int = 256
+    VLLM_MAMBA_SR_SEED_PREFETCH: bool = False
     VLLM_COMPILE_CACHE_SAVE_FORMAT: Literal["binary", "unpacked"] = "binary"
     VLLM_USE_V2_MODEL_RUNNER: bool | None = None
     VLLM_LOG_MODEL_INSPECTION: bool = False
@@ -2039,6 +2040,14 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # inline on the current stream, as without the overlap.
     "VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP_MAX_TOKENS": lambda: int(
         os.getenv("VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP_MAX_TOKENS", "256")
+    # With the FlashInfer Mamba SSU backend and Mamba cache stochastic
+    # rounding enabled, draw the per-layer stochastic-rounding seeds of a
+    # forward pass up front on a side CUDA stream (same values, same order as
+    # the per-layer draws), instead of one small RNG kernel on the critical
+    # path before every SSU call. Each SSU call waits on a CUDA event for its
+    # seed.
+    "VLLM_MAMBA_SR_SEED_PREFETCH": lambda: bool(
+        int(os.getenv("VLLM_MAMBA_SR_SEED_PREFETCH", "0"))
     ),
     # Format for saving torch.compile cache artifacts
     # - "binary": saves as binary file
