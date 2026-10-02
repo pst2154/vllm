@@ -33,7 +33,9 @@ def _make_builder(
     monkeypatch, *, env: bool, trtllm_decode: bool, dcp_world_size: int = 1
 ) -> FlashInferMetadataBuilder:
     monkeypatch.setenv("VLLM_FLASHINFER_FUSED_DRAFT_DECODE", "1" if env else "0")
-    vllm_config = create_vllm_config(max_model_len=1024)
+    # Non-gated model config (no HF token needed); only its attention shape
+    # is used.
+    vllm_config = create_vllm_config(model_name="Qwen/Qwen3-0.6B", max_model_len=1024)
     vllm_config.speculative_config = SpeculativeConfig(
         method="ngram", num_speculative_tokens=3
     )
