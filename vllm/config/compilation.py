@@ -773,6 +773,7 @@ class CompilationConfig:
         "vllm::unified_attention_with_output",
         "vllm::unified_mla_attention_with_output",
         "vllm::mamba_mixer2",
+        "vllm::mamba_mixer2_fused_decode",
         "vllm::mamba_mixer",
         "vllm::short_conv",
         # Qwen4Exp's AMD backend still uses these splitting ops.

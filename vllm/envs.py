@@ -296,6 +296,8 @@ if TYPE_CHECKING:
     VLLM_DISABLE_DSV4_MEGAMOE_SHARED_EXPERT_FUSION: bool = False
     VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD: int = 256
     VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD: int = 1024
+    VLLM_MAMBA2_FUSED_DECODE: bool = False
+    VLLM_MAMBA2_FUSED_DECODE_MAX_SPEC_SEQS: int = 4
     VLLM_COMPILE_CACHE_SAVE_FORMAT: Literal["binary", "unpacked"] = "binary"
     VLLM_USE_V2_MODEL_RUNNER: bool | None = None
     VLLM_LOG_MODEL_INSPECTION: bool = False
@@ -2023,6 +2025,21 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # for the default value of 1024 tokens.
     "VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD": lambda: int(
         os.getenv("VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD", "1024")
+    ),
+    # MambaMixer2 decode: run the causal-conv1d update, the FlashInfer
+    # selective state update (incl. stochastic rounding of an fp16 SSM cache),
+    # the gated RMSNorm and the static FP8 quantization of the out_proj input
+    # as ONE fused CUDA kernel (bit-identical to the unfused path). Only used
+    # for the configurations it reproduces exactly; see
+    # vllm/model_executor/layers/mamba/ops/mamba2_fused_decode.py.
+    "VLLM_MAMBA2_FUSED_DECODE": lambda: bool(
+        int(os.getenv("VLLM_MAMBA2_FUSED_DECODE", "0"))
+    ),
+    # With VLLM_MAMBA2_FUSED_DECODE: largest number of sequences of a
+    # speculative-decoding verify batch that uses the fused kernel (larger
+    # batches use the unfused path, which is faster there).
+    "VLLM_MAMBA2_FUSED_DECODE_MAX_SPEC_SEQS": lambda: int(
+        os.getenv("VLLM_MAMBA2_FUSED_DECODE_MAX_SPEC_SEQS", "4")
     ),
     # Format for saving torch.compile cache artifacts
     # - "binary": saves as binary file

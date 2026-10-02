@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import torch
 from torch import nn
 
+import vllm.envs as envs
 from vllm.config import CacheConfig, ModelConfig, get_current_vllm_config
 from vllm.config.mamba import MambaBackendEnum
 from vllm.distributed import (
@@ -43,6 +44,7 @@ from vllm.model_executor.layers.mamba.ops.ssd_combined import (
     mamba_chunk_scan_combined_varlen,
 )
 from vllm.model_executor.layers.mamba.ops.ssu_dispatch import (
+    get_mamba_ssu_backend,
     reset_replayssm_ring_trackers,
     selective_state_update,
     selective_state_update_replayssm_flashinfer,
@@ -564,11 +566,78 @@ class MambaMixer2(MambaBase, PluggableLayer):
         # Check if running on Blackwell (SM100+) for kernel tuning
         self.is_blackwell = current_platform.is_device_capability_family(100)
 
+        # VLLM_MAMBA2_FUSED_DECODE: fused conv1d + SSU + gated RMSNorm + FP8
+        # quant kernel for decode batches (bit-identical to the unfused path).
+        self.fused_decode_scale_name: str | None = None
+        if envs.VLLM_MAMBA2_FUSED_DECODE:
+            self.fused_decode_scale_name = self._fused_decode_scale_name()
+            if self.fused_decode_scale_name is not None:
+                logger.info_once(
+                    "Using the fused Mamba-2 decode kernel "
+                    "(VLLM_MAMBA2_FUSED_DECODE) for MambaMixer2 layers."
+                )
+            else:
+                logger.info_once(
+                    "VLLM_MAMBA2_FUSED_DECODE has no effect for %s: it needs "
+                    "head_dim 64, d_state 128, 32 heads and 2 groups per rank, "
+                    "conv width 4, gated RMSNorm with 8 groups, a static "
+                    "per-tensor FP8 out_proj, bf16 activations and Blackwell.",
+                    self.prefix,
+                )
+
+    def _fused_decode_scale_name(self) -> str | None:
+        """Name of out_proj's static input-scale parameter if the fused decode
+        kernel reproduces this layer exactly, else None."""
+        from vllm.model_executor.layers.fusion.quant_activation import (
+            get_input_quant_key,
+        )
+        from vllm.model_executor.layers.quantization.utils.quant_utils import (
+            kFp8StaticTensorSym,
+        )
+
+        if not (
+            current_platform.is_cuda() and current_platform.is_device_capability(100)
+        ):
+            return None
+        conv_bias = self.conv1d.bias
+        ok = (
+            self.head_dim == 64
+            and self.ssm_state_size == 128
+            and self.conv_kernel_size == 4
+            and self.num_heads // self.tp_size == 32
+            and self.n_groups // self.tp_size == 2
+            and self.tped_intermediate_size == 2048
+            and self.use_rms_norm
+            and self.norm.n_groups == 8
+            and abs(self.norm.variance_epsilon - 1e-5) < 1e-12
+            and self.activation in ("silu", "swish")
+            and conv_bias is not None
+            and conv_bias.dtype == torch.bfloat16
+            and self.conv1d.weight.dtype == torch.bfloat16
+            and self.norm.weight.dtype == torch.bfloat16
+            and self.D.dtype == torch.bfloat16
+            and self.dt_bias.dtype == torch.bfloat16
+            and self.A.dtype == torch.float32
+            and not self.use_replayssm
+            and self.cache_config is not None
+            and self.cache_config.mamba_cache_mode != "all"
+            and self.mamba_config.backend == MambaBackendEnum.FLASHINFER
+            and get_input_quant_key(self.out_proj) == kFp8StaticTensorSym
+        )
+        if not ok:
+            return None
+        kernel = getattr(self.out_proj.quant_method, "kernel", None)
+        names = getattr(kernel, "layer_param_names", None)
+        return names[2] if names is not None and len(names) > 2 else None
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         mup_vector: torch.Tensor | None = None,
     ):
+        if self.fused_decode_scale_name is not None and mup_vector is None:
+            return self._forward_fused_decode(hidden_states)
+
         # 1. Gated MLP's linear projection
         projected_states, _ = self.in_proj(hidden_states)
         if mup_vector is not None:
@@ -604,6 +673,140 @@ class MambaMixer2(MambaBase, PluggableLayer):
         output, _ = self.out_proj(hidden_states)
 
         return output
+
+    def _forward_fused_decode(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """forward() with conv + SSU + gated RMSNorm + FP8 quant in one op
+        (vllm::mamba_mixer2_fused_decode), whose output is out_proj's
+        pre-quantized FP8 input."""
+        from vllm.model_executor.layers.fusion.quant_activation import (
+            QuantizedActivation,
+        )
+        from vllm.model_executor.layers.quantization.utils.quant_utils import (
+            kFp8StaticTensorSym,
+        )
+
+        assert self.fused_decode_scale_name is not None
+        projected_states, _ = self.in_proj(hidden_states)
+        x_fp8 = torch.empty(
+            (hidden_states.shape[0], self.tped_intermediate_size),
+            dtype=current_platform.fp8_dtype(),
+            device=hidden_states.device,
+        )
+        torch.ops.vllm.mamba_mixer2_fused_decode(
+            projected_states, x_fp8, _encode_layer_name(self.prefix)
+        )
+        qa = QuantizedActivation(
+            data=x_fp8,
+            scale=getattr(self.out_proj, self.fused_decode_scale_name),
+            orig_dtype=hidden_states.dtype,
+            orig_shape=x_fp8.shape,
+            quant_key=kFp8StaticTensorSym,
+        )
+        output, _ = self.out_proj(qa)
+        return output
+
+    def fused_decode_conv_ssm_norm(
+        self, projected_states: torch.Tensor, x_fp8: torch.Tensor
+    ) -> None:
+        """Body of vllm::mamba_mixer2_fused_decode: the fused kernel for
+        decode-only batches it reproduces exactly; otherwise the unfused
+        conv + SSU followed by the exact gated-RMSNorm + FP8 quant kernel."""
+        from vllm.model_executor.layers.mamba.ops import mamba2_fused_decode as fd
+        from vllm.v1.attention.backends.utils import NULL_BLOCK_ID
+
+        scale = getattr(self.out_proj, self.fused_decode_scale_name)
+        attn_metadata = get_forward_context().attn_metadata
+        md = (
+            attn_metadata.get(self.prefix) if isinstance(attn_metadata, dict) else None
+        )
+        sr = self.mamba_config.enable_stochastic_rounding
+        philox = (self.mamba_config.stochastic_rounding_philox_rounds or 10) if sr else 0
+        use_fused = (
+            md is not None
+            and md.num_prefills == 0
+            and md.num_decodes > 0
+            and philox in fd.STP_PHILOX
+        )
+        spec = False
+        if use_fused:
+            assert md is not None
+            sidx = md.state_indices_tensor_d
+            nseq = sidx.shape[0]
+            spec = (
+                md.num_accepted_tokens is not None and md.query_start_loc_d is not None
+            )
+            if spec:
+                use_fused = (
+                    nseq <= envs.VLLM_MAMBA2_FUSED_DECODE_MAX_SPEC_SEQS
+                    and md.query_start_loc_d.shape[0] == nseq + 1
+                    and (sidx.shape[-1], 1, philox) in fd.MTP_INSTANTIATIONS
+                )
+            else:
+                # FlashInfer's single-token SSU switches to a different kernel
+                # (different arithmetic) at batch * heads >= 2 * SMs.
+                use_fused = md.num_decode_tokens * (
+                    self.num_heads // self.tp_size
+                ) < 2 * fd.num_sms(projected_states.device)
+        if not use_fused:
+            ssm_output = torch.empty(
+                (projected_states.shape[0], self.tped_intermediate_size),
+                dtype=projected_states.dtype,
+                device=projected_states.device,
+            )
+            self.conv_ssm_forward(projected_states=projected_states, output=ssm_output)
+            fd.gated_norm_fp8_quant(
+                ssm_output,
+                projected_states[:, : self.tped_intermediate_size],
+                self.norm.weight,
+                scale,
+                x_fp8,
+                projected_states.shape[0],
+            )
+            return
+        assert md is not None
+        # One seed per SSU call, as FlashInferSSUBackend.__call__ draws it
+        # (honours a seed prefetcher if the backend has one).
+        rand_seed = None
+        if sr:
+            prefetcher = getattr(get_mamba_ssu_backend(), "sr_seed_prefetcher", None)
+            if prefetcher is not None:
+                rand_seed = prefetcher.next_seed(projected_states.device)
+            if rand_seed is None:
+                rand_seed = torch.randint(
+                    0, 2**32, (1,), device=projected_states.device
+                )
+        conv_state = (
+            self.kv_cache[0]
+            if is_conv_state_dim_first()
+            else self.kv_cache[0].transpose(-1, -2)
+        )
+        sidx = md.state_indices_tensor_d
+        nseq = sidx.shape[0]
+        args = fd.pack_args(
+            proj=projected_states,
+            conv_w=self.conv_weights,
+            conv_b=self.conv1d.bias,
+            conv_state=conv_state,
+            sidx=sidx,
+            didx=sidx,
+            cu=md.query_start_loc_d if spec else None,
+            nacc=md.num_accepted_tokens if spec else None,
+            ssm=self.kv_cache[1],
+            A=self.A,
+            D=self.D,
+            dt_bias=self.dt_bias,
+            seed=rand_seed,
+            norm_w=self.norm.weight,
+            scale=scale,
+            out=x_fp8,
+            nseq=nseq,
+            pad=NULL_BLOCK_ID,
+            nt=sidx.shape[-1] if spec else md.num_decode_tokens,
+        )
+        if spec:
+            fd.fused_decode_mtp(args, nseq, nt=sidx.shape[-1], philox=philox)
+        else:
+            fd.fused_decode_stp(args, nseq, philox=philox)
 
     def _warmup_ssd_kernels(self, projected_states: torch.Tensor) -> None:
         """Run a minimal SSD forward pass to trigger Triton autotuning
@@ -1281,5 +1484,23 @@ def mamba_mixer2(
 direct_register_custom_op(
     op_name="mamba_mixer2",
     op_func=mamba_mixer2,
+    mutates_args=["output"],
+)
+
+
+def mamba_mixer2_fused_decode(
+    projected_states: torch.Tensor,
+    output: torch.Tensor,
+    layer_name: LayerNameType,
+) -> None:
+    layer_name = _resolve_layer_name(layer_name)
+    forward_context: ForwardContext = get_forward_context()
+    self = forward_context.no_compile_layers[layer_name]
+    self.fused_decode_conv_ssm_norm(projected_states=projected_states, x_fp8=output)
+
+
+direct_register_custom_op(
+    op_name="mamba_mixer2_fused_decode",
+    op_func=mamba_mixer2_fused_decode,
     mutates_args=["output"],
 )
