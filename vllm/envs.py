@@ -308,6 +308,7 @@ if TYPE_CHECKING:
     VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP: bool = False
     VLLM_NEMOTRON_H_MOE_ROUTER_OVERLAP_MAX_TOKENS: int = 256
     VLLM_MAMBA_SR_SEED_PREFETCH: bool = False
+    VLLM_MAMBA_FUSED_STATE_INDEX: bool = False
     VLLM_COMPILE_CACHE_SAVE_FORMAT: Literal["binary", "unpacked"] = "binary"
     VLLM_USE_V2_MODEL_RUNNER: bool | None = None
     VLLM_LOG_MODEL_INSPECTION: bool = False
@@ -2130,6 +2131,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # seed.
     "VLLM_MAMBA_SR_SEED_PREFETCH": lambda: bool(
         int(os.getenv("VLLM_MAMBA_SR_SEED_PREFETCH", "0"))
+    ),
+    # Compute the Mamba "align"-mode state indices (the last
+    # 1 + num_speculative_blocks block-table entries of each request) with one
+    # Triton kernel instead of seven eager torch ops per Mamba KV-cache group.
+    "VLLM_MAMBA_FUSED_STATE_INDEX": lambda: bool(
+        int(os.getenv("VLLM_MAMBA_FUSED_STATE_INDEX", "0"))
     ),
     # Format for saving torch.compile cache artifacts
     # - "binary": saves as binary file
