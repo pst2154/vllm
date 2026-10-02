@@ -35,6 +35,7 @@ from vllm.config.parallel import ParallelConfig
 from vllm.distributed import get_ep_group, get_tensor_model_parallel_world_size
 from vllm.distributed.communication_op import tensor_model_parallel_all_gather
 from vllm.distributed.parallel_state import get_pp_group
+from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import ReLUSquaredActivation
 from vllm.model_executor.layers.attention import Attention
 from vllm.model_executor.layers.fused_moe import (
@@ -96,6 +97,8 @@ from vllm.utils.torch_utils import (
     current_stream,
     direct_register_custom_op,
 )
+
+logger = init_logger(__name__)
 
 
 class NemotronHMLP(nn.Module):
@@ -189,6 +192,9 @@ class NemotronHRouterGateOverlap:
     `max_tokens` tokens run the gate inline on the current stream.
     """
 
+    # Logs the first side-stream fork once per process (engagement check).
+    _fork_logged = False
+
     def __init__(self, gate: nn.Module, num_experts: int, max_tokens: int):
         self.gate = gate
         self.num_experts = num_experts
@@ -209,6 +215,13 @@ class NemotronHRouterGateOverlap:
             router_logits, _ = self.gate(x)
             self.done_event.record(side)
         self._pending = True
+        if not NemotronHRouterGateOverlap._fork_logged:
+            NemotronHRouterGateOverlap._fork_logged = True
+            logger.info(
+                "NemotronH MoE router gate runs on a side CUDA stream, "
+                "overlapped with fc1_latent_proj (batches up to %d tokens).",
+                self.max_tokens,
+            )
         return router_logits
 
     def wait(self) -> None:
