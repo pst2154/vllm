@@ -1061,6 +1061,34 @@ class SamplingParams(
         if not model_config.is_diffusion:
             return
 
+        if "NemotronLabsDiffusionModel" in model_config.architectures:
+            from vllm.transformers_utils.configs.nemotron_labs_diffusion import (
+                validate_read_params,
+            )
+
+            if self.extra_args and (
+                "diffusion_read_only" in self.extra_args
+                or "diffusion_seed_canvas" in self.extra_args
+            ):
+                width = (
+                    diffusion_config.canvas_length
+                    if diffusion_config is not None
+                    else model_config.hf_config.canvas_length
+                )
+                validate_read_params(self, width, model_config.get_vocab_size())
+            if (
+                diffusion_config is not None
+                and diffusion_config.algorithm == "linear_spec"
+                and (
+                    (self.extra_args or {}).get("diffusion_read_only")
+                    or self.logprob_token_ids
+                )
+            ):
+                raise VLLMValidationError(
+                    "Nemotron read-only scoring and indexed logprobs require "
+                    "algorithm='masked_diffusion'"
+                )
+
         if diffusion_config is not None and diffusion_config.algorithm == "linear_spec":
             if self.temperature != 0:
                 raise VLLMValidationError(
