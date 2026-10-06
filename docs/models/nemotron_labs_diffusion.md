@@ -46,6 +46,12 @@ FlashAttention requires FA4. FlashInfer does not support the mixed
 causal/bidirectional attention. This implementation covers
 text-only generation; vision inputs are not included.
 
+Diffusion and linear speculation currently require pipeline parallel size 1.
+Unsupported pipeline configurations are rejected during engine configuration.
+Returned token and top-k logprobs use the distribution at the step where each
+position is revealed, including when requests with different logprob settings
+share a batch.
+
 ## Autoregressive inference
 
 The same checkpoint also supports ordinary causal, token-by-token generation:
@@ -89,7 +95,8 @@ block. Rejected KV positions are rolled back and overwritten. Each block takes
 two forward passes; this does not guarantee a speedup over ordinary AR.
 
 Logprobs, when requested, come from the causal predictions that produced the
-accepted tokens (including the carried seed). Mask token 100 is excluded from
+accepted tokens (including the carried seed). Acceptance counts and carried-seed
+selection remain on GPU when logprobs are enabled. Mask token 100 is excluded from
 both draft and verification sampling. Greedy outputs follow the AR verification
 rule; floating-point differences between attention shapes can still change
 close argmax decisions. Denoising thresholds and iteration limits do not apply
