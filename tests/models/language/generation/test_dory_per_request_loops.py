@@ -73,7 +73,7 @@ def test_per_request_loops_match_fixed_servers(vllm_runner):
     overrides = {"n_recurrent_loops": 2, "max_recurrent_loops": MAX_LOOPS}
     with vllm_runner(MODEL, hf_overrides=overrides, **COMMON) as llm:
         alone = _run(llm, jobs, together=False)
-        # interleaved loop counts in one batch: one pass per count per step
+        # interleaved loop counts in one batch: one masked pass per step
         mixed = _run(llm, jobs, together=True)
         default = _run(llm, [(i, None) for i in prompts], together=False)
     for key in jobs:
