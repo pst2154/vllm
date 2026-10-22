@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 from abc import ABC, abstractmethod
+from collections.abc import Hashable
 from typing import Any, ClassVar, cast
 
 import torch
@@ -141,6 +142,20 @@ class ModelState(ABC):
         kv_cache_config: KVCacheConfig,
     ) -> None:
         """Capture the CUDA graphs this state runs inside the model's forward."""
+        return None
+
+    def cudagraph_variants(self) -> tuple[Hashable, ...]:
+        """Distinct forward graphs this state can select per step (e.g. a model
+        whose depth is a per-request setting). FULL CUDA graphs are captured once
+        per variant. The default ``(None,)`` is one graph, the common case."""
+        return (None,)
+
+    def set_cudagraph_variant(self, variant: Hashable) -> None:
+        """Select ``variant`` for the dummy inputs of the next capture."""
+        return None
+
+    def cudagraph_variant(self) -> Hashable:
+        """The variant the batch prepared by ``prepare_inputs`` runs with."""
         return None
 
     def get_additional_cg_support(self) -> tuple[AttentionCGSupport, str | None]:

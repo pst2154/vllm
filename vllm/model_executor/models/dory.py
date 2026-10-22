@@ -4,14 +4,18 @@
 
 import math
 from collections.abc import Iterable
+from itertools import combinations
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+from vllm.compilation.backends import set_model_tag
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import VllmConfig
 from vllm.distributed import get_tensor_model_parallel_world_size
+from vllm.forward_context import get_forward_context, is_forward_context_available
 from vllm.model_executor.layers.attention import Attention
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
@@ -28,6 +32,9 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.parameter import PerTensorScaleParameter
 from vllm.sequence import IntermediateTensors
+from vllm.utils.torch_utils import async_tensor_h2d
+from vllm.v1.core.sched.output import NewRequestData
+from vllm.v1.worker.gpu.model_states.default import DefaultModelState
 
 from .utils import maybe_prefix
 
@@ -228,12 +235,15 @@ class DoryDecoderLayer(nn.Module):
         return slerp_alpha(residual, out, self.mlp_alpha, self._alpha_scale)
 
 
-@support_torch_compile
 class DoryBackbone(nn.Module):
+    """Weights + layers. Not compiled itself: the compiled units are the
+    DoryLoopVariant modules below, one per loop count."""
+
     def __init__(self, config, cache_config, quant_config, prefix):
         super().__init__()
         self.config = config
-        self.num_loops = config.n_recurrent_loops
+        # The per-loop KV caches are sized for the largest per-request count.
+        self.num_loops = config.max_recurrent_loops or config.n_recurrent_loops
         n_in = config.n_input_layers
         n_rec = config.n_recurrent_layers
         self.embeddings = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
@@ -251,12 +261,7 @@ class DoryBackbone(nn.Module):
             ]
         )
 
-    def forward(
-        self,
-        input_ids: torch.Tensor | None,
-        positions: torch.Tensor,
-        inputs_embeds: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    def run(self, input_ids, positions, inputs_embeds, num_loops):
         h = inputs_embeds if inputs_embeds is not None else self.embeddings(input_ids)
         c = self.config
         n_in, n_rec = c.n_input_layers, c.n_recurrent_layers
@@ -266,7 +271,7 @@ class DoryBackbone(nn.Module):
         input_h = h
 
         state = input_h
-        for i in range(self.num_loops):
+        for i in range(num_loops):
             combined = justnorm(state + input_h)
             h = combined
             for layer in self.layers[n_in : n_in + n_rec]:
@@ -277,6 +282,106 @@ class DoryBackbone(nn.Module):
         for layer in self.layers[n_in + n_rec :]:
             h = layer(positions, h)
         return h
+
+
+class _DoryLoopVariantBase(nn.Module):
+    def __init__(
+        self,
+        *,
+        vllm_config: VllmConfig,
+        prefix: str = "",
+        core=None,
+        num_loops: int = 1,
+    ):
+        super().__init__()
+        self.core = core  # shared: parameters are de-duplicated by identity
+        self.num_loops = num_loops
+
+
+def _make_loop_variant(num_loops: int):
+    """A torch.compile unit running `num_loops` loops: the same graph as a server
+    started with n_recurrent_loops=num_loops. Each variant needs its own forward
+    qualname: vLLM keys the AOT compile cache on the forward's qualname."""
+    name = f"DoryLoopVariantL{num_loops}"
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None,
+        positions: torch.Tensor,
+        inputs_embeds: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.core.run(input_ids, positions, inputs_embeds, self.num_loops)
+
+    forward.__qualname__ = f"{name}.forward"
+    cls = type(
+        name, (_DoryLoopVariantBase,), {"forward": forward, "__qualname__": name}
+    )
+    return support_torch_compile(cls)
+
+
+# --------------------------------------------------------------- per-request loops
+# Each request may set its loop count with SamplingParams.extra_args["loops"]
+# (validated, and its prefix cache salted, by DoryConfig.request_cache_salt).
+# DoryModelState turns the batch into a step key = the distinct loop counts in it:
+# - one count: the plain N-loop graph, the same graph as n_recurrent_loops=N;
+# - several counts: one pass per count (grouped by loop count). During a pass only
+#   that count's tokens write KV (the others get slot -1, like padding), and each
+#   token keeps the hidden state of its own count's pass, so every row is computed
+#   exactly as when its request runs alone.
+# FULL CUDA graphs are captured once per step key (ModelState.cudagraph_variants).
+
+
+class DoryModelState(DefaultModelState):
+    def __init__(self, vllm_config, model, encoder_cache, device):
+        super().__init__(vllm_config, model, encoder_cache, device)
+        self.default_loops = vllm_config.model_config.hf_config.n_recurrent_loops
+        # Per-request loop counts (by the runner's req_index) and the persistent
+        # per-token buffer the graphs read (FULL graphs replay it in place).
+        self.req_loops = np.full(self.max_num_reqs, self.default_loops, np.int32)
+        self.loop_counts = torch.full(
+            (self.max_num_tokens,),
+            self.default_loops,
+            dtype=torch.int32,
+            device=device,
+        )
+        self._capture_key: tuple[int, ...] | None = None
+
+    def add_request(self, req_index: int, new_req_data: NewRequestData) -> None:
+        super().add_request(req_index, new_req_data)
+        sp = new_req_data.sampling_params
+        loops = (sp.extra_args or {}).get("loops") if sp is not None else None
+        self.req_loops[req_index] = self.default_loops if loops is None else loops
+
+    def prepare_inputs(self, input_batch, req_states):
+        out = super().prepare_inputs(input_batch, req_states)
+        n = input_batch.num_tokens_after_padding
+        loops = self.req_loops[input_batch.idx_mapping_np]
+        key = tuple(int(x) for x in np.unique(loops))
+        if len(key) > 1:
+            per_token = np.full(n, key[-1], dtype=np.int32)  # padding: any count
+            num = input_batch.num_scheduled_tokens[: input_batch.num_reqs]
+            per_token[: int(num.sum())] = np.repeat(loops, num)
+            async_tensor_h2d(per_token, out=self.loop_counts[:n])
+        self.model.step_key = key
+        out["loop_counts"] = self.loop_counts[:n]
+        return out
+
+    def prepare_dummy_inputs(self, num_reqs: int, num_tokens: int):
+        out = super().prepare_dummy_inputs(num_reqs, num_tokens)
+        key = self._capture_key or self.model.default_key
+        self.model.step_key = key
+        self.loop_counts[:num_tokens].fill_(key[-1])
+        out["loop_counts"] = self.loop_counts[:num_tokens]
+        return out
+
+    def cudagraph_variants(self):
+        return tuple(self.model.step_keys)
+
+    def set_cudagraph_variant(self, variant) -> None:
+        self._capture_key = variant
+
+    def cudagraph_variant(self):
+        return self.model.step_key
 
 
 class DoryForCausalLM(nn.Module):
@@ -299,6 +404,26 @@ class DoryForCausalLM(nn.Module):
             vllm_config.quant_config,
             prefix=maybe_prefix(prefix, "backbone"),
         )
+        # Compiled units: one N-loop graph per per-request loop count (1..max).
+        default, max_loops = config.n_recurrent_loops, self.backbone.num_loops
+        counts = range(1, max_loops + 1)
+        # step keys = the distinct loop counts in a batch: singles + every mixed set
+        self.step_keys = [
+            key for r in range(1, max_loops + 1) for key in combinations(counts, r)
+        ]
+        self.default_key = (default,)
+        self.step_key = self.default_key
+        self._all_compiled = False
+        variants = {}
+        for n in counts:
+            with set_model_tag(f"dory_loops{n}"):
+                variants[str(n)] = _make_loop_variant(n)(
+                    vllm_config=vllm_config,
+                    prefix=maybe_prefix(prefix, f"loops{n}"),
+                    core=self.backbone,
+                    num_loops=n,
+                )
+        self.loop_variants = nn.ModuleDict(variants)
         self.lm_head = ParallelLMHead(
             config.vocab_size,
             config.hidden_size,
@@ -311,14 +436,56 @@ class DoryForCausalLM(nn.Module):
     def embed_input_ids(self, input_ids):
         return self.backbone.embeddings(input_ids)
 
+    @staticmethod
+    def get_model_state_cls() -> type[DoryModelState]:
+        return DoryModelState
+
     def forward(
         self,
         input_ids: torch.Tensor | None,
         positions: torch.Tensor,
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
+        loop_counts: torch.Tensor | None = None,
     ):
-        return self.backbone(input_ids, positions, inputs_embeds=inputs_embeds)
+        key = self.step_key if loop_counts is not None else self.default_key
+        if not self._all_compiled:
+            # First forward = the engine's profiling run: compile every variant here, on
+            # the same inputs. A variant compiled later (first called during CUDA graph
+            # capture, smaller batch) gets other inductor size hints, hence other kernel
+            # configs and other rounding than a server started with that loop count.
+            self._all_compiled = True
+            for n in self.loop_variants:
+                if int(n) not in key:
+                    self.loop_variants[n](input_ids, positions, inputs_embeds)
+        if len(key) == 1:
+            return self.loop_variants[str(key[0])](input_ids, positions, inputs_embeds)
+        # Mixed batch: one pass per loop count. During a pass only that count's
+        # tokens write KV (the others' slots are -1, like padding), so every
+        # token's KV and hidden state come from the graph of its own count only,
+        # as when its request runs alone.
+        maps = []
+        if is_forward_context_available():
+            sm = get_forward_context().slot_mapping
+            if isinstance(sm, dict):
+                maps = list(
+                    {
+                        id(t): t for t in sm.values() if isinstance(t, torch.Tensor)
+                    }.values()
+                )
+        saved = [t.clone() for t in maps]
+        out = None
+        for n in key:
+            sel = loop_counts == n
+            for t, o in zip(maps, saved):
+                k = min(t.shape[0], sel.shape[0])
+                t[:k].copy_(torch.where(sel[:k], o[:k], torch.full_like(o[:k], -1)))
+            h = self.loop_variants[str(n)](input_ids, positions, inputs_embeds)
+            # exact selection: each token keeps the pass of its own loop count
+            out = h.clone() if out is None else torch.where(sel.unsqueeze(-1), h, out)
+        for t, o in zip(maps, saved):
+            t.copy_(o)
+        return out
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor | None:
         logits = self.logits_processor(self.lm_head, hidden_states)

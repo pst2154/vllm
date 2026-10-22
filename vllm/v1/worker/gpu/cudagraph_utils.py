@@ -177,7 +177,11 @@ class CudaGraphManager:
         # dispatch() is a plain dict lookup instead of a per-call bisect.
         self._lora_dispatch_map, self._max_lora_case = self._build_lora_dispatch_map()
 
-        self.graphs: dict[BatchExecutionDescriptor, torch.cuda.CUDAGraph] = {}
+        # FULL graphs of the selected model variant (see ModelState.cudagraph_variants)
+        self._variant_graphs: dict[
+            Hashable, dict[BatchExecutionDescriptor, torch.cuda.CUDAGraph]
+        ] = {None: {}}
+        self.graphs = self._variant_graphs[None]
         self.pool = current_platform.get_global_graph_pool() if cudagraph_mode else None
 
         self._graphs_captured = False
@@ -405,7 +409,8 @@ class CudaGraphManager:
         every captured graph holding a stale data pointer. `_capture_descs` is
         kept, so `needs_capture()` still reports the work to redo.
         """
-        self.graphs.clear()
+        for graphs in self._variant_graphs.values():
+            graphs.clear()
         self._graphs_captured = False
         if self.breakable_cg_runner is not None:
             BreakableCUDAGraphWrapper.clear_all_graphs()
@@ -551,6 +556,10 @@ class CudaGraphManager:
             num_active_loras=effective_loras,
             num_ubatches=num_ubatches,
         )
+
+    def select_variant(self, variant: Hashable) -> None:
+        """Make ``variant``'s FULL graphs the ones captured into / replayed."""
+        self.graphs = self._variant_graphs.setdefault(variant, {})
 
     def run_fullgraph(self, desc: BatchExecutionDescriptor):
         """Replay a captured FULL cudagraph."""
@@ -785,12 +794,26 @@ class ModelCudaGraphManager(CudaGraphManager):
 
             return forward_fn
 
-        super().capture(create_forward_fn, progress_bar_desc)
+        variants = model_state.cudagraph_variants()
+        for variant in variants:
+            # One set of FULL graphs per model variant; a variant's PIECEWISE graphs
+            # live in its own compiled modules, so recapturing them is a no-op.
+            model_state.set_cudagraph_variant(variant)
+            self.select_variant(variant)
+            desc = (
+                progress_bar_desc
+                if len(variants) == 1
+                else (f"{progress_bar_desc} [{variant}]")
+            )
+            super().capture(create_forward_fn, desc)
+        model_state.set_cudagraph_variant(None)
+        self.select_variant(variants[0])
 
     def run_fullgraph(
-        self, desc: BatchExecutionDescriptor
+        self, desc: BatchExecutionDescriptor, variant: Hashable = None
     ) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]] | IntermediateTensors:
         """Replay a captured FULL cudagraph and return hidden states."""
+        self.select_variant(variant)
         super().run_fullgraph(desc)
         if not self.is_last_pp_rank:
             assert self.intermediate_tensors is not None

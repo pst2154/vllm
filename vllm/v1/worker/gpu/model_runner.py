@@ -2029,7 +2029,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.kv_connector.pre_forward(
                 scheduler_output, input_batch, attn_metadata=attn_metadata
             )
-            model_output = self.cudagraph_manager.run_fullgraph(batch_desc)
+            model_output = self.cudagraph_manager.run_fullgraph(
+                batch_desc, self.model_state.cudagraph_variant()
+            )
         else:
             # For piecewise and eager mode, just call model().
             batch_descriptor = BatchDescriptor(
