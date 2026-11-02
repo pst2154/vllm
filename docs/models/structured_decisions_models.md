@@ -13,6 +13,7 @@ used for classification and routing.
 | `ClefFlashForJointSchema` | `ClefFlashStrategy` | `token_classify` | `JointSchemaHead` | `Cloudflare/clef-flash` |
 | `Gemma4ForCausalLM`       | `NextTokenStrategy` | `generate`       | N/A               | `google/gemma-4-E2B-it` |
 | `Qwen3ForCausalLM`        | `NextTokenStrategy` | `generate`       | N/A               | `Qwen/Qwen3-0.6B`, etc. |
+| `NemotronLabsDiffusionModel` | `NemotronDecideStrategy` | `generate` | N/A | bidirectional decision fine-tunes of `nvidia/Nemotron-Labs-Diffusion-8B` |
 
 ### Multimodal Models
 
@@ -370,6 +371,28 @@ vllm serve vllm-sr/d3
   once and shared by every question of the request.
 - `/classify` and `/pooling` return the raw logits of all 255 codes; only the
   first codes, one per option, belong to a question.
+
+### Nemotron Labs Diffusion decision fine-tunes
+
+Checkpoints fine-tuned from Nemotron Labs Diffusion for bidirectional
+decision reads answer each question with one forward over the whole prompt.
+
+```bash
+vllm serve <checkpoint> --hf-overrides '{"ar_mode": true, "is_causal": false}' \
+    --logprobs-mode processed_logprobs --max-num-batched-tokens 65536
+```
+
+- Each question is one read of the prompt the fine-tune uses: a fixed system
+  prompt, then the state, the question and its options as one JSON object,
+  each option under a one-token code, ending in the mask token. A question's
+  probabilities are the softmax of its codes' logprobs at the mask.
+- Options are listed in the fine-tune's order (by length and overlap with the
+  state, then rotated), and answers map back to the request's options.
+- A choice can have up to 128 options, or up to 512 with `--max-logprobs`
+  of at least its option count (wider questions read the top logprobs
+  restricted to their codes). `instructions` returns 400, since the
+  prompt is fixed. Prompts are not chunked or truncated, so
+  `--max-num-batched-tokens` must cover the longest prompt.
 
 ### Liquid d1
 

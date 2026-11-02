@@ -48,6 +48,7 @@ from vllm.entrypoints.openai.decisions.strategies import (
     DiffusionGemmaCanvasStrategy,
     JointSchemaStrategy,
     LiquidStrategy,
+    NemotronDecideStrategy,
     NextTokenStrategy,
     ReadContext,
     cap_pixels,
@@ -1502,3 +1503,52 @@ async def test_joint_reads_on_both_endpoints(dgemma, endpoint):
     assert [c.args[0] for c in engine.check_admission.call_args_list] == [1, 1, 1]
     assert engine.generate.call_count == 3
     assert response.usage.output_tokens == engine.generate.call_args.args[1].max_tokens
+
+
+class _CharTokenizer:
+    """One token per character: enough for option lengths and codes."""
+
+    def encode(self, text, add_special_tokens=False):
+        return [ord(c) for c in text]
+
+
+def _nemotron() -> NemotronDecideStrategy:
+    strategy = object.__new__(NemotronDecideStrategy)
+    strategy.tokenizer = _CharTokenizer()
+    strategy.codes = [(c, ord(c)) for c in "ABCDEFGH"]
+    return strategy
+
+
+def test_nemotron_strategy_is_selected():
+    nemotron = model("NemotronLabsDiffusionModel", "processed_logprobs")
+    assert select_read_strategy(nemotron, ("generate",)) is NemotronDecideStrategy
+
+
+@pytest.mark.parametrize(
+    "type_name,criteria",
+    [
+        ("choice", {"billing": "payments", "outage": None, "feature": "new work"}),
+        ("noul", {"true": "money is moving"}),
+        ("score", ["calm", "annoyed", "furious"]),
+    ],
+)
+def test_nemotron_options_map_back_to_the_question(type_name, criteria):
+    strategy = _nemotron()
+    q = build_question("q", type_name, "Which?", criteria, 8, labeled=False)
+    listed, position = strategy._options(q, '"state text"')
+    # Codes are assigned by listed position; every option is listed once.
+    assert [o["code"] for o in listed] == list("ABCDEFGH"[: len(listed)])
+    assert sorted(position) == list(range(len(q.options)))
+    if type_name == "noul":
+        by_label = {o["label"]: i for i, o in enumerate(listed)}
+        assert position == [by_label["true"], by_label["false"]]
+        assert (
+            listed[by_label["false"]]["meaning"]
+            == (NemotronDecideStrategy.NOUL_MEANINGS[0])
+        )
+    elif type_name == "choice":
+        for k, o in enumerate(q.options):
+            assert listed[position[k]]["label"] == o.name
+    else:
+        for k in range(len(q.options)):
+            assert listed[position[k]]["label"] == str(k)
