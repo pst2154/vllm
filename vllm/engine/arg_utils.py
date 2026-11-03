@@ -616,6 +616,7 @@ class EngineArgs:
     max_num_batched_tokens: int | None = None
     max_num_scheduled_tokens: int | None = None
     long_prefill_token_threshold: int = SchedulerConfig.long_prefill_token_threshold
+    prefill_step_soft_limit: int | None = SchedulerConfig.prefill_step_soft_limit
     long_prefill_token_threshold_adaptive: bool = (
         SchedulerConfig.long_prefill_token_threshold_adaptive
     )
@@ -1782,6 +1783,10 @@ class EngineArgs:
             **scheduler_kwargs["long_prefill_token_threshold"],
         )
         scheduler_group.add_argument(
+            "--prefill-step-soft-limit",
+            **scheduler_kwargs["prefill_step_soft_limit"],
+        )
+        scheduler_group.add_argument(
             "--long-prefill-token-threshold-adaptive",
             **scheduler_kwargs["long_prefill_token_threshold_adaptive"],
         )
@@ -2682,6 +2687,7 @@ class EngineArgs:
             policy=self.scheduling_policy,
             scheduler_cls=self.scheduler_cls,
             long_prefill_token_threshold=self.long_prefill_token_threshold,
+            prefill_step_soft_limit=self.prefill_step_soft_limit,
             long_prefill_token_threshold_adaptive=(
                 self.long_prefill_token_threshold_adaptive
             ),

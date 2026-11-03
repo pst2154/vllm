@@ -83,6 +83,16 @@ class SchedulerConfig:
     The cap is not applied when the request is the only one in the batch,
     since there is no other request for it to starve."""
 
+    prefill_step_soft_limit: int | None = Field(default=None, ge=1)
+    """Soft limit on the tokens of one engine step when waiting requests are
+    admitted. Once a step already holds scheduled work, a waiting request that
+    would take the step past this limit waits for a later step; a request that
+    alone exceeds the limit still runs, by itself (up to
+    max_num_batched_tokens). Meant for prompts that cannot be chunked (chunked
+    prefill disabled, e.g. encoder-only or non-causal models), where
+    max_num_batched_tokens must cover the longest prompt and very large steps
+    run less efficiently. ``None`` (default) disables the limit."""
+
     long_prefill_token_threshold_adaptive: bool = Field(default=False)
     """Floor the effective long prefill token threshold at a fair share of
     the token budget: max_num_batched_tokens divided by the number of

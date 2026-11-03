@@ -1047,6 +1047,8 @@ class Scheduler(SchedulerInterface):
 
         # Next, schedule the WAITING requests.
         if not preempted_reqs and self._pause_state != PauseState.PAUSED_ALL:
+            # Budget before any waiting request joins this step (soft limit).
+            waiting_token_budget_start = token_budget
             step_skipped_waiting: deque[Request] = deque()
             step_skipped_kv_holding: deque[Request] = deque()
 
@@ -1330,6 +1332,23 @@ class Scheduler(SchedulerInterface):
 
                     if 0 < long_prefill_token_threshold < num_new_tokens:
                         num_new_tokens = long_prefill_token_threshold
+
+                    # Soft step limit: once a waiting request joined this step,
+                    # defer the next one if it would take the step past the
+                    # limit. The first waiting request of a step always joins,
+                    # so a request larger than the limit is never starved.
+                    prefill_step_soft_limit = (
+                        self.scheduler_config.prefill_step_soft_limit
+                    )
+                    if (
+                        prefill_step_soft_limit is not None
+                        and token_budget < waiting_token_budget_start
+                        and self.max_num_scheduled_tokens
+                        - token_budget
+                        + num_new_tokens
+                        > prefill_step_soft_limit
+                    ):
+                        break
 
                     # chunked prefill has to be enabled explicitly to allow
                     # pooling requests to be chunked

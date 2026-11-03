@@ -450,6 +450,39 @@ def test_schedule(enable_prefix_caching: bool, prompt_logprobs: int | None):
         assert scheduler.running[i] == request
 
 
+@pytest.mark.parametrize("enable_chunked_prefill", [False, True])
+def test_prefill_step_soft_limit(enable_chunked_prefill: bool):
+    """Once a waiting request joined a step, the next one waits if it would
+    take the step past the soft limit. The first waiting request of a step
+    always joins, so a request larger than the limit is not starved."""
+    scheduler = create_scheduler(
+        max_num_batched_tokens=1024,
+        enable_chunked_prefill=enable_chunked_prefill,
+        prefill_step_soft_limit=250,
+    )
+    small = create_requests(num_requests=4, num_tokens=100, max_tokens=1)
+    big = create_requests(num_requests=1, num_tokens=400, req_ids=["big"])
+    for request in small + big:
+        scheduler.add_request(request)
+
+    new_req_ids = []
+    for _ in range(3):
+        output = scheduler.schedule()
+        new_req_ids.append(sorted(r.req_id for r in output.scheduled_new_reqs))
+        assert output.total_num_scheduled_tokens <= 1024
+    # 100 + 100 fit, a third prompt would make 300 > 250; the 400-token
+    # prompt exceeds the limit and runs as the first new request of its step.
+    assert new_req_ids == [["0", "1"], ["2", "3"], ["big"]]
+
+
+def test_prefill_step_soft_limit_disabled_by_default():
+    scheduler = create_scheduler(max_num_batched_tokens=1024)
+    for request in create_requests(num_requests=4, num_tokens=100):
+        scheduler.add_request(request)
+    output = scheduler.schedule()
+    assert len(output.scheduled_new_reqs) == 4
+
+
 def test_pooling_chunked_prefill_can_finish_at_max_model_len():
     scheduler = create_scheduler(
         max_num_seqs=1, max_model_len=8, max_num_batched_tokens=4, runner="pooling"
